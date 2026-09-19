@@ -1,6 +1,3 @@
-# OFFICIAL 
-
-
 import time
 from datetime import datetime, timedelta
 from selenium.webdriver.common.action_chains import ActionChains
