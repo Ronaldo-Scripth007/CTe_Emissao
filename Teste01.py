@@ -607,7 +607,7 @@ while True:
             try:
                 # Usa uma espera curta de 3 segundos para o botão id="0"
                 botao_ok_aviso = WebDriverWait(navegador, 3).until(
-                    EC.element_to_be_clickable((By.ID, "0"))
+                    EC.element_to_be_clickable((By.ID, "7. OK"))
                 )
                 navegador.execute_script("arguments[0].click();", botao_ok_aviso)
                 print("✅ Pop-up 'Nenhuma Nota' detetado e '7. OK' clicado!")
