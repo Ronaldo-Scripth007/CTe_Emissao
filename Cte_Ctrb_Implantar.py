@@ -1,4 +1,4 @@
-
+# NESTA VERSÃO ESTOU EMITINDO APENAS UM CTE. MARCANDO TODAS AS NOTAS (FLAG) E FAZENDO O CTRB EM SEGUIDA
 
 import time
 import os
@@ -15,7 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import credenciais
 
-print("Iniciando Robô de Emissão de CTE.")
+print("Iniciando Robô de Emissão de CTE e CTRB...")
 
 # =====================================================================
 # CONFIGURAÇÃO DO NAVEGADOR
@@ -121,16 +121,16 @@ aba_portal = navegador.window_handles[0]
 ssw_logado = False
 aba_principal_ssw = None
 
-# -- INTELIGÊNCIA: MEMÓRIA DAS NOTAS JÁ ACESSASDAS ---
+# === INTELIGÊNCIA: MEMÓRIA DAS NOTAS TENTADAS ===
 indices_notas_processadas = []
-# ==========================================================
+# ================================================
 
 # =====================================================================
-# LOOP PRINCIPAL - PROCESSA EXATAMENTE 30 NOTAS
+# LOOP PRINCIPAL - PROCESSA EXATAMENTE 21 NOTAS
 # =====================================================================
-for numero_nota in range(1, 31):
+for numero_nota in range(1, 21):
     print(f"\n{'=' * 60}")
-    print(f"PROCESSANDO NOTA #{numero_nota} DE 3")
+    print(f"PROCESSANDO NOTA #{numero_nota} DE 20")
     print(f"{'=' * 60}")
 
     # Garante foco no portal
@@ -193,6 +193,7 @@ for numero_nota in range(1, 31):
                 break
     except Exception as e:
         print(f"⚠️ Aviso: Não consegui mapear colunas. Usando coluna {index_frete_pagar} por padrão.")
+    # ====================================================
 
     # ------------------------------------------------------------------
     # TENTA ACESSAR A PRÓXIMA NOTA LIVRE (COM INTELIGÊNCIA DE MEMÓRIA E EXCLUSÃO)
@@ -203,17 +204,7 @@ for numero_nota in range(1, 31):
         if index in indices_notas_processadas:
             continue
 
-    # # ================================================================|Temporaria
-    # # 0.5 REGRA TEMPORÁRIA: PULAR AS PRIMEIRAS 16 LINHAS
-    # # =================================================================|Temporaria
-    #     if index < 16:
-    #         print(f"🚧 REGRA TEMPORÁRIA: Pulando linha {index + 1} propositadamente.")
-    #         continue
-    #     # =================================================================|Temporaria
-
         linha = botao.find_element(By.XPATH, "./ancestor::tr")
-
-
 
         # 1. VERIFICA SE TEM ALERTA DE BORDA VERMELHA
         try:
@@ -286,48 +277,23 @@ for numero_nota in range(1, 31):
         try:
             # 5.1 Extrai o Estado de Origem (Coluna 4)
             texto_origem = linha.find_element(By.XPATH, ".//td[4]").text
-            linha_origem = texto_origem.split('\n')[0].strip()
-
-            # Limpa reticências caso o texto esteja cortado pelo portal (Ex: "CABO DE SANTO AGOSTI...")
-            linha_origem = linha_origem.replace("...", "").strip()
-
-            if "-" in linha_origem:
-                estado_origem = linha_origem.split("-")[-1].strip()[:2].upper()
-                cidade_origem = linha_origem.split("-")[0].strip()
-            elif "/" in linha_origem:
-                estado_origem = linha_origem.split("/")[-1].strip()[:2].upper()
-                cidade_origem = linha_origem.split("/")[0].strip()
+            linha_origem = texto_origem.split('\n')[0]
+            if " - " in linha_origem:
+                estado_origem = linha_origem.split(" - ")[-1].strip()[:2].upper()
+                cidade_origem = linha_origem.split(" - ")[0].strip()
             else:
-                # Caso "CAJAMAR SP" (Sem traço) - Pega a última palavra se tiver 2 letras
-                partes = linha_origem.split()
-                if len(partes) > 1 and len(partes[-1]) == 2:
-                    estado_origem = partes[-1].upper()
-                    cidade_origem = " ".join(partes[:-1]).strip()
-                else:
-                    estado_origem = "MG"  # Proteção máxima: se estiver muito cortado, assume MG
-                    cidade_origem = linha_origem
+                estado_origem = ""
+                cidade_origem = linha_origem.strip()
 
             # 5.2 Extrai o Estado de Destino (Coluna 5)
             texto_destino = linha.find_element(By.XPATH, ".//td[5]").text
-            linha_destino = texto_destino.split('\n')[0].strip()
-
-            # Limpa reticências do destino também
-            linha_destino = linha_destino.replace("...", "").strip()
-
-            if "-" in linha_destino:
-                estado_destino = linha_destino.split("-")[-1].strip()[:2].upper()
-                cidade_destino = linha_destino.split("-")[0].strip()
-            elif "/" in linha_destino:
-                estado_destino = linha_destino.split("/")[-1].strip()[:2].upper()
-                cidade_destino = linha_destino.split("/")[0].strip()
+            linha_destino = texto_destino.split('\n')[0]
+            if " - " in linha_destino:
+                estado_destino = linha_destino.split(" - ")[-1].strip()[:2].upper()
+                cidade_destino = linha_destino.split(" - ")[0].strip()
             else:
-                partes_dest = linha_destino.split()
-                if len(partes_dest) > 1 and len(partes_dest[-1]) == 2:
-                    estado_destino = partes_dest[-1].upper()
-                    cidade_destino = " ".join(partes_dest[:-1]).strip()
-                else:
-                    estado_destino = ""
-                    cidade_destino = linha_destino
+                estado_destino = ""
+                cidade_destino = linha_destino.strip()
 
             # Extração adicional para o CTRB usar depois
             try:
@@ -351,10 +317,10 @@ for numero_nota in range(1, 31):
                 valor_pagar = "0,00"
 
             # 5.3 REGRA DE EXCLUSÃO DO NORDESTE
-            estados_bloqueados = ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE", "RJ"]
+            estados_nordeste = ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"]
 
             # Se a origem OU o destino estiverem na lista do Nordeste, o robô pula a nota
-            if estado_origem in estados_bloqueados or estado_destino in estados_bloqueados:
+            if estado_origem in estados_nordeste or estado_destino in estados_nordeste:
                 print(
                     f"🌵 Pulando nota {index + 1}: A rota entra ou sai do Nordeste ({estado_origem} -> {estado_destino}).")
                 continue
@@ -422,32 +388,6 @@ for numero_nota in range(1, 31):
                 print(f"⚠️ Aviso: Não consegui extrair a placa do portal. Motivo: {type(erro_tecnico).__name__}")
                 placa_dinamica = ""
 
-
-##
-            try:
-                celula_frete = linha.find_element(By.XPATH, f"./td[{index_frete_pagar}]")
-                texto_valor = celula_frete.text.strip()
-
-                valor_limpo = (
-                    texto_valor
-                    .replace("R$", "")
-                    .replace("\xa0", "")
-                    .replace(".", "")
-                    .replace(",", ".")
-                    .strip()
-                )
-
-                if not valor_limpo or float(valor_limpo) <= 0:
-                    print(f"⚠️ AVISO: Valor zerado confirmado dentro da nota. Pulando.")
-                    continue
-
-                valor_pagar = texto_valor.replace("R$", "").replace("\xa0", "").replace(".", "").strip()
-                print(f"💰 Valor confirmado: {valor_pagar}")
-
-            except Exception as e:
-                print(f"⚠️ Não consegui confirmar o valor dentro da nota: {e}")
-                continue
-
             # Extração adicional do PIX e Pagamento para o CTRB
             pagamento_extraido = "100%"
             pix_extraido = ""
@@ -474,16 +414,6 @@ for numero_nota in range(1, 31):
                 pass
 
             break
-
-# =========================================================================
-# BARREIRA DE SEGURANÇA: NENHUMA NOTA VÁLIDA NA PÁGINA
-# =========================================================================
-
-    if not nota_acessada:
-        print("\n⚠️ Não encontrei notas a ser lançadas no portal.")
-        print("Encerando a busca de novas notas...")
-        break
-
 
     # ------------------------------------------------------------------
     # ETAPA 3: ABRIR SSW E FAZER LOGIN (OU REAPROVEITAR ABA EXISTENTE)
@@ -519,13 +449,12 @@ for numero_nota in range(1, 31):
     campo_unidade.click()
     campo_unidade.send_keys(Keys.CONTROL, "a")
     campo_unidade.send_keys(Keys.BACKSPACE)
-    time.sleep(1.5)
 
     # Aplica a regra ESTADO + 'E'
     unidade_ssw = f"{estado_origem}E"
     print(f"Preenchendo Unidade SSW com: {unidade_ssw}")
     campo_unidade.send_keys(unidade_ssw)
-    time.sleep(1.5)
+    time.sleep(1)
 
     janelas_antes_71 = navegador.window_handles
 
@@ -833,7 +762,7 @@ for numero_nota in range(1, 31):
     campo_placa_prov.send_keys(Keys.CONTROL, "a")
     campo_placa_prov.send_keys(Keys.BACKSPACE)
     campo_placa_prov.send_keys(placa_veiculo)
-    time.sleep(2)
+    time.sleep(1)
 
     print("Inserindo Tipo de mercadoria....")
     campo_tab = espera.until(EC.presence_of_element_located((By.ID, "cod_merc")))
@@ -841,7 +770,7 @@ for numero_nota in range(1, 31):
     campo_tab.send_keys(Keys.CONTROL, "a")
     campo_tab.send_keys(Keys.BACKSPACE)
     campo_tab.send_keys("1")
-    time.sleep(2)
+    time.sleep(1)
 
     # ------------------------------------------------------------------
     # ETAPA 10: CLICAR EM APONTAR NFs (COM INTELIGÊNCIA HÍBRIDA)
@@ -1010,7 +939,7 @@ for numero_nota in range(1, 31):
     # FLUXO 2: ANEXAR CTE NO PORTAL
     # =====================================================================
     print("\n--- ANEXANDO CTE NO PORTAL ---")
-    caminho_arquivo_cte = credenciais.CAMINHO_CTE
+    caminho_arquivo_cte = r"C:\Users\Transking\OneDrive\Área de Trabalho\Emissor_Doc_Fiscal.pdf"
     try:
         xpath_input_cte = "//span[contains(text(), 'CTe')]/following-sibling::input[@type='file']"
         input_cte = espera.until(EC.presence_of_element_located((By.XPATH, xpath_input_cte)))
@@ -1019,3 +948,385 @@ for numero_nota in range(1, 31):
         time.sleep(6)
     except Exception as e:
         print(f"⚠️ Erro ao anexar o CTE: {e}")
+
+    # =====================================================================
+    # FLUXO 3: EMISSÃO DO CTRB
+    # =====================================================================
+    print("\n--- INICIANDO FLUXO CTRB ---")
+    navegador.switch_to.window(aba_principal_ssw)
+
+    print("Indo para a tela 72...")
+    campo_unidade = espera.until(EC.element_to_be_clickable((By.ID, "2")))
+    campo_unidade.click()
+    campo_unidade.send_keys(Keys.CONTROL, "a")
+    campo_unidade.send_keys(Keys.BACKSPACE)
+    campo_unidade.send_keys(unidade_ssw)
+    time.sleep(1)
+
+    janelas_antes_72 = navegador.window_handles
+
+    campo_opcao = espera.until(EC.element_to_be_clickable((By.ID, "3")))
+    campo_opcao.click()
+    campo_opcao.send_keys(Keys.CONTROL, "a")
+    campo_opcao.send_keys(Keys.BACKSPACE)
+    campo_opcao.send_keys("72")
+    time.sleep(1)
+    campo_opcao.send_keys(Keys.ENTER)
+
+    print("A aguardar que a janela 72 abra...")
+    espera.until(EC.number_of_windows_to_be(len(janelas_antes_72) + 1))
+
+    janelas_depois_72 = navegador.window_handles
+    aba_nova_72 = [j for j in janelas_depois_72 if j not in janelas_antes_72][0]
+
+    navegador.switch_to.window(aba_nova_72)
+    navegador.maximize_window()
+    print(f"✅ Foco alterado para a Tela 72 com sucesso (Unidade: {unidade_ssw})!")
+
+    print(f"A preencher a placa ({placa_dinamica})...")
+    campo_placa = WebDriverWait(navegador, 10).until(
+        EC.presence_of_element_located((By.ID, "placa_veic")))
+
+    navegador.execute_script("arguments[0].scrollIntoView(true);", campo_placa)
+    time.sleep(0.5)
+    campo_placa.clear()
+    time.sleep(0.5)
+    campo_placa.send_keys(placa_dinamica)
+    time.sleep(1)
+
+    try:
+        btn_enviar = navegador.find_element(By.ID, "btn_env")
+        navegador.execute_script("arguments[0].click();", btn_enviar)
+        print("✅ Botão de enviar clicado com sucesso!")
+    except Exception:
+        campo_placa.send_keys(Keys.ENTER)
+        print("✅ Placa enviada usando a tecla ENTER!")
+
+    time.sleep(2)
+
+    try:
+        alerta_navegador = navegador.switch_to.alert
+        texto_alerta = alerta_navegador.text
+        alerta_navegador.accept()
+        print(f"⚠️ Alerta do navegador fechado: '{texto_alerta}'")
+        time.sleep(1)
+    except Exception:
+        pass
+
+    print("Aguardando confirmação de emissão de CTRB (1º Pop-up)...")
+    try:
+        xpath_ctrb = "//a[@id='0' and contains(text(), 'CTRB')]"
+        botao_ctrb = WebDriverWait(navegador, 8).until(
+            EC.visibility_of_element_located((By.XPATH, xpath_ctrb))
+        )
+        navegador.execute_script("arguments[0].click();", botao_ctrb)
+        print("✅ Opção '2. Emitir novo CTRB assim mesmo.' clicada com sucesso!")
+        time.sleep(4)
+    except Exception:
+        print("ℹ️ 1º Pop-up (CTRB) não apareceu.")
+
+    print("Aguardando aviso de falta de Manifesto (2º Pop-up)...")
+    try:
+        xpath_manifesto = "//a[@id='0' and contains(text(), 'Continuar')]"
+        botao_manifesto = WebDriverWait(navegador, 8).until(
+            EC.visibility_of_element_located((By.XPATH, xpath_manifesto))
+        )
+        navegador.execute_script("arguments[0].click();", botao_manifesto)
+        print("✅ Opção '2. Continuar assim mesmo.' (Manifesto) clicada com sucesso!")
+        time.sleep(3)
+    except Exception:
+        print("ℹ️ 2º Pop-up (Manifesto) não apareceu.")
+
+    print("\n✅ Fluxo da Tela 72 concluído!")
+    time.sleep(2)
+
+    print("\nAguardando a tela de Terceiro carregar...")
+    try:
+        time.sleep(3)
+        janelas_abertas = navegador.window_handles
+        navegador.switch_to.window(janelas_abertas[-1])
+        navegador.maximize_window()
+        print("✅ Foco ajustado para a aba mais recente (Tela de Terceiro).")
+
+        xpath_link_cep = "//*[@id='link_cep_orig' or contains(text(), 'CEP')]"
+        link_cep_origem = WebDriverWait(navegador, 15).until(
+            EC.presence_of_element_located((By.XPATH, xpath_link_cep))
+        )
+        navegador.execute_script("arguments[0].click();", link_cep_origem)
+        print("✅ Link 'CEP origem' clicado!")
+
+        print("Aguardando o campo de Nome da cidade aparecer...")
+        campo_busca = WebDriverWait(navegador, 10).until(
+            EC.presence_of_element_located((By.ID, "-1"))
+        )
+
+        navegador.execute_script("arguments[0].focus();", campo_busca)
+        time.sleep(2)
+        campo_busca.clear()
+        time.sleep(2)
+        campo_busca.send_keys(cidade_origem)
+        time.sleep(3)
+        campo_busca.send_keys(Keys.ENTER)
+        print(f"✅ Cidade '{cidade_origem}' digitada e busca iniciada com sucesso!")
+
+    except Exception as e:
+        print(f"⚠️ Erro ao tentar preencher o CEP de origem: {e}")
+
+    time.sleep(2)
+
+    print("\nPreenchendo Unidade de Destino e Previsão de Chegada...")
+    try:
+        campo_unidade_dest = WebDriverWait(navegador, 10).until(
+            EC.presence_of_element_located((By.ID, "id_filial_sigla_dest"))
+        )
+        navegador.execute_script("arguments[0].focus();", campo_unidade_dest)
+        time.sleep(0.5)
+        campo_unidade_dest.clear()
+        time.sleep(0.5)
+
+        campo_unidade_dest.send_keys("FEC", Keys.TAB)
+        time.sleep(1.5)
+        print("✅ Unidade destino 'FEC' preenchida!")
+        time.sleep(2)
+
+        print("Aguardando possível pop-up '7. OK' da unidade de destino...")
+        try:
+            xpath_7ok = "//a[contains(text(), '7. OK') or contains(text(), '7.')]"
+            botao_7ok = WebDriverWait(navegador, 4).until(
+                EC.visibility_of_element_located((By.XPATH, xpath_7ok))
+            )
+            navegador.execute_script("arguments[0].click();", botao_7ok)
+            print("✅ Pop-up '7. OK' fechado com sucesso!")
+            time.sleep(2)
+        except Exception:
+            print("ℹ️ Pop-up '7. OK' não apareceu (fluxo prosseguiu normalmente).")
+
+        print("\nIniciando o preenchimento do CEP de destino...")
+        try:
+            time.sleep(3)
+
+            xpath_link_cep_dest = "//*[@id='link_cep_dest']"
+            link_cep_destino = WebDriverWait(navegador, 15).until(
+                EC.presence_of_element_located((By.XPATH, xpath_link_cep_dest))
+            )
+            navegador.execute_script("arguments[0].click();", link_cep_destino)
+            print("✅ Link 'CEP destino' clicado!")
+
+            print("Aguardando o campo de Nome da cidade (destino) aparecer...")
+            campo_busca_dest = WebDriverWait(navegador, 10).until(
+                EC.presence_of_element_located((By.ID, "-1"))
+            )
+
+            navegador.execute_script("arguments[0].focus();", campo_busca_dest)
+            time.sleep(2)
+            campo_busca_dest.clear()
+            time.sleep(2)
+            campo_busca_dest.send_keys(cidade_destino)
+            time.sleep(3)
+
+            janelas_antes_cidade = navegador.window_handles
+
+            campo_busca_dest.send_keys(Keys.ENTER)
+            print(f"✅ Cidade de destino '{cidade_destino}' digitada e busca iniciada com sucesso!")
+
+            print("Verificando se o SSW forçou a abertura da tela '027 - Cadastro'...")
+            try:
+                time.sleep(4)
+                janelas_depois_cidade = navegador.window_handles
+
+                if len(janelas_depois_cidade) > len(janelas_antes_cidade):
+                    aba_027 = [j for j in janelas_depois_cidade if j not in janelas_antes_cidade][0]
+                    navegador.switch_to.window(aba_027)
+                    navegador.maximize_window()
+                    print("⚠️ Ecrã 027 detetado! A mudar o foco para fechar a pendência...")
+
+                    botao_mais = WebDriverWait(navegador, 10).until(
+                        EC.presence_of_element_located((By.ID, "btn_mais"))
+                    )
+                    navegador.execute_script("arguments[0].click();", botao_mais)
+                    print("✅ Botão de gravação (seta azul) clicado no ecrã 027!")
+
+                    time.sleep(3)
+                    navegador.switch_to.window(janelas_antes_cidade[-1])
+                    print("✅ Foco retornado ao ecrã de emissão com sucesso.")
+                else:
+                    print("ℹ️ Nenhuma pendência detetada. O fluxo continua normalmente.")
+            except Exception:
+                navegador.switch_to.window(janelas_antes_cidade[-1])
+
+        except Exception as e:
+            print(f"⚠️ Erro ao tentar preencher o CEP de destino: {e}")
+
+        time.sleep(2)
+
+        print("\nPreenchendo a Previsão de Chegada (Data e Hora)...")
+        formato_data = "%d%m%y"
+        if data_previsao and hora_previsao:
+            try:
+                data_obj = datetime.strptime(str(data_previsao).strip(), formato_data).date()
+                hoje = datetime.now().date()
+
+                if data_obj < hoje:
+                    data_previsao = (hoje + timedelta(days=1)).strftime(formato_data)
+                    print(f"⚠️ Data ajustada para amanhã: {data_previsao}")
+            except ValueError:
+                pass
+
+            try:
+                campo_data = WebDriverWait(navegador, 5).until(
+                    EC.presence_of_element_located((By.ID, "id_data_prev_cheg"))
+                )
+                navegador.execute_script("arguments[0].focus();", campo_data)
+                time.sleep(0.5)
+                campo_data.clear()
+                campo_data.send_keys(data_previsao, Keys.TAB)
+                time.sleep(3)
+
+                print("Aguardando possível pop-up '7. OK' da Data...")
+                try:
+                    xpath_7ok_data = "//a[contains(text(), '7. OK') or contains(text(), '7.')]"
+                    botao_7ok_data = WebDriverWait(navegador, 3).until(
+                        EC.visibility_of_element_located((By.XPATH, xpath_7ok_data))
+                    )
+                    navegador.execute_script("arguments[0].click();", botao_7ok_data)
+                    print("✅ Pop-up '7. OK' (Data) fechado!")
+                    time.sleep(2)
+                except Exception:
+                    print("ℹ Pop-up de Data não apareceu.")
+
+            except Exception:
+                print("ℹ️ Campo de DATA não encontrado.")
+
+            try:
+                campo_hora = navegador.find_element(By.ID, "id_hora_prev_cheg")
+                navegador.execute_script("arguments[0].focus();", campo_hora)
+                time.sleep(0.5)
+                campo_hora.clear()
+                campo_hora.send_keys(hora_previsao)
+            except Exception:
+                print("ℹ️ Campo de HORA não encontrado.")
+
+            print(f"✅ Previsão de chegada preenchida com sucesso!")
+
+    except Exception as e:
+        print(f"⚠️ Erro geral ao preencher destino/previsão: {e}")
+
+    time.sleep(3)
+
+    print("\nPreenchendo Natureza, Valor e Observações...")
+    try:
+        try:
+            WebDriverWait(navegador, 15).until(
+                EC.invisibility_of_element_located((By.ID, "procimg"))
+            )
+        except Exception:
+            pass
+
+        campo_nat_carga = navegador.find_element(By.ID, "id_nat_carga")
+        navegador.execute_script("arguments[0].focus();", campo_nat_carga)
+        time.sleep(0.5)
+        campo_nat_carga.clear()
+        campo_nat_carga.send_keys("1", Keys.TAB)
+        time.sleep(0.5)
+
+        campo_valor = navegador.find_element(By.ID, "id_vlr_ficha")
+        navegador.execute_script("arguments[0].focus();", campo_valor)
+        time.sleep(0.5)
+        campo_valor.clear()
+        campo_valor.send_keys(valor_pagar)
+
+        campo_obs1 = navegador.find_element(By.ID, "id_obs1")
+        campo_obs1.send_keys(f"PAGAMENTO: {pagamento_extraido}")
+
+        campo_obs2 = navegador.find_element(By.ID, "id_obs2")
+        campo_obs2.send_keys(f"ID: {vrid_limpo} - Placa: {placa_dinamica} ")
+        time.sleep(0.5)
+
+        campo_obs3 = navegador.find_element(By.ID, "id_obs3")
+        campo_obs3.send_keys(f"PIX: {pix_extraido}")
+
+        print("✅ Todos os dados preenchidos com sucesso!")
+
+    except Exception as e:
+        print(f"⚠️ Erro ao preencher os dados finais: {e}")
+
+    time.sleep(3)
+
+    try:
+        print("Realizando scroll até o botão final de emissão...")
+        botao_enviar_final = WebDriverWait(navegador, 5).until(
+            EC.presence_of_element_located((By.ID, "id_link_env"))
+        )
+        navegador.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_enviar_final)
+        time.sleep(1)
+
+        print("Acionando a função interna de envio do SSW...")
+        navegador.execute_script("f_button_env_disable(); ajaxEnvia('CTRB_RPA', 0);")
+        print("🚀 COMANDO DE EMISSÃO ENVIADO.")
+
+    except Exception as e:
+        print(f"⚠️ Erro na etapa final de emissão: {e}")
+
+    time.sleep(13)
+
+    print("Aguardando pop-up de sucesso '1. Continuar'...")
+    try:
+        xpath_1continuar = "//*[@id='-4' and contains(@class, 'dialog')]"
+        botao_continuar = WebDriverWait(navegador, timeout=8).until(
+            EC.presence_of_element_located((By.XPATH, xpath_1continuar))
+        )
+        navegador.execute_script("arguments[0].click();", botao_continuar)
+        print("✅ Pop-up '1. Continuar' clicado e fechado com sucesso!")
+        time.sleep(3)
+    except Exception:
+        print("ℹ️ Pop-up '1. Continuar' não apareceu. Assumindo sucesso pelo clique do envio.")
+
+    print(f"\n✅ Lançamento CTRB ({vrid_limpo}) concluído com sucesso!")
+
+    print("Fechando janelas do SSW e voltando ao portal para anexar o CTRB...")
+    for handle in list(navegador.window_handles):
+        if handle != aba_portal and handle != aba_principal_ssw:
+            navegador.switch_to.window(handle)
+            navegador.close()
+            time.sleep(0.5)
+
+    navegador.switch_to.window(aba_portal)
+    time.sleep(3)
+
+    # =====================================================================
+    # FLUXO 4: ANEXAR CTRB E CONFIRMAR EMISSÃO NO PORTAL
+    # =====================================================================
+    print("\n--- ANEXANDO CTRB E CONFIRMANDO NO PORTAL ---")
+    caminho_arquivo_ctrb = r"C:\Users\Transking\OneDrive\Área de Trabalho\Emissor_Doc_Fiscal.pdf"
+
+    try:
+        xpath_input_ctrb = "//span[contains(text(), 'CTRB')]/following-sibling::input[@type='file']"
+        input_ctrb = espera.until(EC.presence_of_element_located((By.XPATH, xpath_input_ctrb)))
+        input_ctrb.send_keys(caminho_arquivo_ctrb)
+        print("✅ Arquivo CTRB anexado com sucesso!")
+        time.sleep(6)
+    except Exception as e:
+        print(f"⚠️ Erro ao anexar o CTRB: {e}")
+
+    try:
+        botao_confirmar = navegador.find_element(By.XPATH,
+                                                 "//button[contains(text(), 'Confirmar Emissão') or contains(text(), 'OK')]")
+        navegador.execute_script("arguments[0].click();", botao_confirmar)
+        print("✅ Emissão CONFIRMADA E FINALIZADA no portal Amazon!")
+        time.sleep(3)
+    except Exception as e:
+        print("⚠️ Botão de confirmação não encontrado. Tentando fechar no Cancelar/X...")
+        try:
+            botao_fechar_nota_portal = navegador.find_element(By.XPATH,
+                                                              "//button[contains(text(), 'Cancelar') or contains(@class, 'lucide-x')]")
+            navegador.execute_script("arguments[0].click();", botao_fechar_nota_portal)
+        except:
+            pass
+
+    print("✅ De volta ao portal! Buscando próxima nota...")
+
+# =====================================================================
+# FIM DO LOOP
+# =====================================================================
+print("\n✅ Robô finalizado! Todas as notas foram processadas.")
+time.sleep(10)

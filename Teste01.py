@@ -1,6 +1,9 @@
-# Teste da versão Official
+# NESTA VERSÃO ESTOU EMITINDO APENAS UM CTE. MARCANDO TODAS AS NOTAS (FLAG) E FAZENDO O CTRB EM SEGUIDA
+# USAR ESTE PRA IMPLATAR
 
 import time
+import os
+import re
 from datetime import datetime, timedelta
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium import webdriver
@@ -13,7 +16,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import credenciais
 
-print("Iniciando Robô de Emissão de CTE...")
+print("Iniciando Robô de Emissão de CTE e CTRB...")
 
 # =====================================================================
 # CONFIGURAÇÃO DO NAVEGADOR
@@ -119,65 +122,130 @@ aba_portal = navegador.window_handles[0]
 ssw_logado = False
 aba_principal_ssw = None
 
+# -- INTELIGÊNCIA: MEMÓRIA DAS NOTAS JÁ ACESSASDAS ---
+indices_notas_processadas = []
+# ==========================================================
+
 # =====================================================================
-# LOOP PRINCIPAL - PROCESSA TODAS AS NOTAS ATÉ ACABAR
+# LOOP PRINCIPAL - PROCESSA EXATAMENTE 30 NOTAS
 # =====================================================================
-while True:
-    numero_nota += 1
+for numero_nota in range(1, 31):
     print(f"\n{'=' * 60}")
-    print(f"PROCESSANDO NOTA #{numero_nota}")
+    print(f"PROCESSANDO NOTA #{numero_nota} DE 30")
     print(f"{'=' * 60}")
 
-    # Garante foco no portal e atualiza a lista
+    # Garante foco no portal
     navegador.switch_to.window(aba_portal)
-    navegador.refresh()
-    time.sleep(3)
 
-    # Reaplicar filtro Pendentes após refresh
+    # Só atualiza a página e aplica filtros na PRIMEIRA VOLTA (para não perder o estado das linhas)
+    if numero_nota == 1:
+        navegador.refresh()
+        time.sleep(3)
+        try:
+            filtro_status = espera.until(EC.element_to_be_clickable(
+                (By.XPATH, "//label[contains(text(), 'Status Emissão')]/following-sibling::button[@role='combobox']")))
+            navegador.execute_script("arguments[0].click();", filtro_status)
+            time.sleep(1)
+
+            opcao_pendentes = espera.until(EC.element_to_be_clickable(
+                (By.XPATH, "//*[@role='option' and contains(., 'Pendentes')] | //div[text()='Pendentes']")))
+            navegador.execute_script("arguments[0].click();", opcao_pendentes)
+            time.sleep(2.5)
+        except Exception as e:
+            print(f"Aviso nos filtros: {e}")
+    else:
+        # Nas voltas seguintes, apenas espera um pouco para a tela estabilizar
+        time.sleep(1.5)
+
+    # Busca notas livres ignorando filtro fixo
+    xpath_notas_livres = "//tr[.//button[contains(., 'Emitir')]]//button[contains(., 'Emitir')]"
     try:
-        filtro_status = espera.until(EC.element_to_be_clickable(
-            (By.XPATH, "//label[contains(text(), 'Status Emissão')]/following-sibling::button[@role='combobox']")))
-        navegador.execute_script("arguments[0].click();", filtro_status)
-        time.sleep(1)
-
-        opcao_pendentes = espera.until(EC.element_to_be_clickable(
-            (By.XPATH, "//*[@role='option' and contains(., 'Pendentes')] | //div[text()='Pendentes']")))
-        navegador.execute_script("arguments[0].click();", opcao_pendentes)
-        time.sleep(2.5)
-    except Exception as e:
-        print(f"Aviso nos filtros: {e}")
-
-    # Busca notas MG disponíveis
-    xpath_mg = "//tr[.//div[contains(text(), ' - MG') or contains(@title, ' - MG')]]//button[contains(., 'Emitir')]"
-    try:
-        botoes_emitir = espera.until(EC.presence_of_all_elements_located((By.XPATH, xpath_mg)))
-        print(f"Encontrada(s) {len(botoes_emitir)} nota(s) de MG nesta página.")
+        botoes_emitir = espera.until(EC.presence_of_all_elements_located((By.XPATH, xpath_notas_livres)))
+        if numero_nota == 1:
+            print(f"Encontrada(s) {len(botoes_emitir)} nota(s) nesta página.")
     except Exception:
-        print("Nenhuma nota MG encontrada. Encerrando robô.")
+        print("Nenhuma nota encontrada. Encerrando robô.")
         break
 
     nota_acessada = False
     placa_dinamica = ""
     vrid_limpo = ""
     cnpj_pagador = "FALHOU"
+    estado_origem = ""
+    cidade_origem = ""
+    estado_destino = ""
+    cidade_destino = ""
+    data_previsao = ""
+    hora_previsao = ""
+    valor_pagar = ""
+
+    # === MAPEAR COLUNA DO FRETE A PAGAR DINAMICAMENTE ===
+    print("Mapeando colunas da tabela...")
+    index_frete_pagar = 7  # Valor padrão de segurança
+    try:
+        # Pega todos os cabeçalhos (<th>) da tabela
+        cabecalhos = espera.until(EC.presence_of_all_elements_located((By.XPATH, "//thead//th")))
+        for i, th in enumerate(cabecalhos):
+            titulo = th.get_attribute("title") or ""
+            texto = th.text or ""
+            if "Frete a Pagar" in titulo or "Frete a Pagar" in texto:
+                index_frete_pagar = i + 1  # +1 porque o XPath conta a partir do 1
+                print(f"✅ Coluna 'Frete a Pagar' detetada automaticamente na posição: {index_frete_pagar}")
+                break
+    except Exception as e:
+        print(f"⚠️ Aviso: Não consegui mapear colunas. Usando coluna {index_frete_pagar} por padrão.")
 
     # ------------------------------------------------------------------
-    # TENTA ACESSAR A PRÓXIMA NOTA LIVRE
+    # TENTA ACESSAR A PRÓXIMA NOTA LIVRE (COM INTELIGÊNCIA DE MEMÓRIA E EXCLUSÃO)
     # ------------------------------------------------------------------
     for index, botao in enumerate(botoes_emitir):
+
+        # 0. VERIFICA SE ESTA NOTA JÁ FOI TENTADA (SE SIM, PULA SILENCIOSAMENTE PARA A DE BAIXO)
+        if index in indices_notas_processadas:
+            continue
+
+    # ================================================================|Temporaria
+    # 0.5 REGRA TEMPORÁRIA: PULAR AS PRIMEIRAS 16 LINHAS
+    # =================================================================|Temporaria
+        if index < 16:
+            print(f"🚧 REGRA TEMPORÁRIA: Pulando linha {index + 1} propositadamente.")
+            continue
+        # =================================================================|Temporaria
+
         linha = botao.find_element(By.XPATH, "./ancestor::tr")
 
-        # 1. VERIFICA SE TEM ALERTA VERMELHO
+
+
+        # 1. VERIFICA SE TEM ALERTA DE BORDA VERMELHA
         try:
-            alerta = linha.find_elements(By.XPATH,
-                                         ".//td[1]//div[contains(@class, 'border-red-500') or contains(@class, 'animate-pulse')]")
-            if len(alerta) > 0:
-                print(f"🛑 Pulando nota {index + 1}: Alerta vermelho.")
+            alerta_borda = linha.find_elements(By.XPATH,
+                                               ".//td[1]//div[contains(@class, 'border-red-500') or contains(@class, 'bg-red-500')]")
+            if len(alerta_borda) > 0:
+                print(f"🛑 Pulando nota {index + 1}: Alerta de borda/fundo vermelho.")
                 continue
         except:
             pass
 
-        # 2. VERIFICA SE ESTÁ OCUPADA (TEM NOME)
+        # 1.5. VERIFICA SE A LINHA INTEIRA ESTÁ VERMELHA (TEXTO VERMELHO NO TR)
+        try:
+            classes_da_linha = linha.get_attribute("class") or ""
+            if "text-red" in classes_da_linha:
+                print(f"🩸 Pulando nota {index + 1}: A linha inteira está com texto vermelho.")
+                continue
+        except:
+            pass
+
+
+        # 2. VERIFICA SE TEM O CÍRCULO VERMELHO ANIMADO
+        try:
+            alerta_circulo = linha.find_elements(By.XPATH, ".//div[contains(@class, 'animate-pulse')]")
+            if len(alerta_circulo) > 0:
+                print(f"🔴 Pulando nota {index + 1}: Círculo vermelho de atenção detetado.")
+                continue
+        except:
+            pass
+
+        # 3. VERIFICA SE ESTÁ OCUPADA (TEM NOME PREENCHIDO)
         try:
             span_nome = linha.find_element(By.XPATH, ".//td[1]//span[contains(@class, 'truncate')]")
             nome_emitente = span_nome.text.strip()
@@ -187,8 +255,123 @@ while True:
         except:
             pass
 
-        # 3. SE PASSOU PELOS DOIS TESTES ACIMA, A NOTA ESTÁ OK!
+        # 4. VERIFICA A COLUNA "FRETE A PAGAR" (COM ÍNDICE DINÂMICO)
+        try:
+            celula_frete = linha.find_element(By.XPATH, f"./td[{index_frete_pagar}]")
+            texto_frete = celula_frete.text.strip()
+
+            # 4.1 Verifica se a PRÓPRIA coluna do frete está com borda/fundo vermelho
+            alerta_frete = celula_frete.find_elements(By.XPATH,
+                                                      ".//*[contains(@class, 'bg-red-500') or contains(@class, 'border-red-500') or contains(@class, 'text-red-500')]")
+            if len(alerta_frete) > 0:
+                print(f"🔴💰 Pulando nota {index + 1}: Alerta vermelho direto na coluna do Frete a Pagar.")
+                continue
+
+            # 4.2 Verifica se o frete é um travessão (—), vazio ou zero
+            if texto_frete in ["—", "-", "", "0", "0,00"]:
+                print(f"📉💰 Pulando nota {index + 1}: Frete a Pagar está vazio/zerado ('{texto_frete}').")
+                continue
+
+            # 4.3 Se tiver R$, converte para número e verifica se é <= 1
+            if "R$" in texto_frete:
+                texto_limpo = texto_frete.replace("R$", "").replace(".", "").replace(",", ".").strip()
+                if texto_limpo != "":
+                    valor_frete = float(texto_limpo)
+                    if valor_frete <= 1.0:
+                        print(f"📉💰 Pulando nota {index + 1}: Valor do frete é R$ {valor_frete:.2f} (<= 1).")
+                        continue
+        except Exception:
+            pass
+
+        # 5. EXTRAIR O ESTADO DE ORIGEM E DESTINO (COM REGRA DO NORDESTE) E DADOS DO CTRB
+        try:
+            # 5.1 Extrai o Estado de Origem (Coluna 4)
+            texto_origem = linha.find_element(By.XPATH, ".//td[4]").text
+            linha_origem = texto_origem.split('\n')[0].strip()
+
+            # Limpa reticências caso o texto esteja cortado pelo portal (Ex: "CABO DE SANTO AGOSTI...")
+            linha_origem = linha_origem.replace("...", "").strip()
+
+            if "-" in linha_origem:
+                estado_origem = linha_origem.split("-")[-1].strip()[:2].upper()
+                cidade_origem = linha_origem.split("-")[0].strip()
+            elif "/" in linha_origem:
+                estado_origem = linha_origem.split("/")[-1].strip()[:2].upper()
+                cidade_origem = linha_origem.split("/")[0].strip()
+            else:
+                # Caso "CAJAMAR SP" (Sem traço) - Pega a última palavra se tiver 2 letras
+                partes = linha_origem.split()
+                if len(partes) > 1 and len(partes[-1]) == 2:
+                    estado_origem = partes[-1].upper()
+                    cidade_origem = " ".join(partes[:-1]).strip()
+                else:
+                    estado_origem = "MG"  # Proteção máxima: se estiver muito cortado, assume MG
+                    cidade_origem = linha_origem
+
+            # 5.2 Extrai o Estado de Destino (Coluna 5)
+            texto_destino = linha.find_element(By.XPATH, ".//td[5]").text
+            linha_destino = texto_destino.split('\n')[0].strip()
+
+            # Limpa reticências do destino também
+            linha_destino = linha_destino.replace("...", "").strip()
+
+            if "-" in linha_destino:
+                estado_destino = linha_destino.split("-")[-1].strip()[:2].upper()
+                cidade_destino = linha_destino.split("-")[0].strip()
+            elif "/" in linha_destino:
+                estado_destino = linha_destino.split("/")[-1].strip()[:2].upper()
+                cidade_destino = linha_destino.split("/")[0].strip()
+            else:
+                partes_dest = linha_destino.split()
+                if len(partes_dest) > 1 and len(partes_dest[-1]) == 2:
+                    estado_destino = partes_dest[-1].upper()
+                    cidade_destino = " ".join(partes_dest[:-1]).strip()
+                else:
+                    estado_destino = ""
+                    cidade_destino = linha_destino
+
+            # Extração adicional para o CTRB usar depois
+            try:
+                linha_data_hora = texto_destino.split('\n')[1]
+                data_bruta = linha_data_hora.split(' - ')[0].strip()
+                partes_data = data_bruta.split('/')
+                data_previsao = f"{partes_data[0]}{partes_data[1]}{partes_data[2][-2:]}"
+                hora_previsao = linha_data_hora.split(' - ')[1].strip().replace(":", "")
+            except:
+                data_previsao = ""
+                hora_previsao = ""
+
+            try:
+                celulas_valor = linha.find_elements(By.XPATH, ".//td[contains(text(), 'R$')]")
+                if len(celulas_valor) > 0:
+                    texto_valor = celulas_valor[-1].text
+                else:
+                    texto_valor = "0,00"
+                valor_pagar = texto_valor.replace("R$", "").replace(".", "").strip()
+            except:
+                valor_pagar = "0,00"
+
+            # 5.3 REGRA DE EXCLUSÃO DO NORDESTE
+            estados_bloqueados = ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE", "RJ"]
+
+            # Se a origem OU o destino estiverem na lista do Nordeste, o robô pula a nota
+            if estado_origem in estados_bloqueados or estado_destino in estados_bloqueados:
+                print(
+                    f"🌵 Pulando nota {index + 1}: A rota entra ou sai do Nordeste ({estado_origem} -> {estado_destino}).")
+                continue
+
+            print(f"📍 Rota detetada e permitida: {estado_origem} -> {estado_destino}")
+
+        except Exception:
+            estado_origem = ""
+            estado_destino = ""
+
+        # 6. SE PASSOU POR TODOS OS TESTES, A NOTA ESTÁ LIVRE E VÁLIDA!
         print(f"✅ Nota {index + 1} está OK! Acessando...")
+
+        # Grava na memória que já tentámos esta linha, para não voltar a ela na próxima volta do loop!
+        indices_notas_processadas.append(index)
+
         navegador.execute_script("arguments[0].click();", botao)
         time.sleep(2)
 
@@ -221,30 +404,75 @@ while True:
             # 2. Extrai a PLACA dinamicamente
             try:
                 time.sleep(2)
-                # Procura a palavra 'Placas' exata e entra no span da linha de baixo que tem a classe 'truncate'
                 xpath_placa = "//span[text()='Placas']/following-sibling::div//span[contains(@class, 'truncate')]"
-
-                # Pega todos os elementos correspondentes e foca no último [-1] (o pop-up ativo por cima)
                 elementos_placa = espera.until(EC.presence_of_all_elements_located((By.XPATH, xpath_placa)))
-                elemento_alvo = elementos_placa[-1]
+                elemento_alvo = elementos_placa[0]
 
-                # Tenta pegar a placa lendo o atributo "title" (método mais seguro e invisível a botões)
                 placa_dinamica = elemento_alvo.get_attribute("title")
-
-                # Fallback: se o title vier vazio por algum motivo, tenta pegar o texto visível da tela
                 if not placa_dinamica:
                     placa_dinamica = elemento_alvo.text
 
-                placa_dinamica = placa_dinamica.strip()
+                placa_dinamica = placa_dinamica.split('\n')[0].split('-')[0].strip()
 
                 if placa_dinamica == "":
                     print("⚠️ Aviso: O campo de placa foi encontrado, mas estava VAZIO no portal.")
                 else:
                     print(f"🎯 Placa extraída com sucesso: {placa_dinamica}")
 
-            except Exception as erro_tecnico:
+            except Exception as  erro_tecnico:
                 print(f"⚠️ Aviso: Não consegui extrair a placa do portal. Motivo: {type(erro_tecnico).__name__}")
                 placa_dinamica = ""
+
+
+##
+            try:
+                celula_frete = linha.find_element(By.XPATH, f"./td[{index_frete_pagar}]")
+                texto_valor = celula_frete.text.strip()
+
+                valor_limpo = (
+                    texto_valor
+                    .replace("R$", "")
+                    .replace("\xa0", "")
+                    .replace(".", "")
+                    .replace(",", ".")
+                    .strip()
+                )
+
+                if not valor_limpo or float(valor_limpo) <= 0:
+                    print(f"⚠️ AVISO: Valor zerado confirmado dentro da nota. Pulando.")
+                    continue
+
+                valor_pagar = texto_valor.replace("R$", "").replace("\xa0", "").replace(".", "").strip()
+                print(f"💰 Valor confirmado: {valor_pagar}")
+
+            except Exception as e:
+                print(f"⚠️ Não consegui confirmar o valor dentro da nota: {e}")
+                continue
+
+            # Extração adicional do PIX e Pagamento para o CTRB
+            pagamento_extraido = "100%"
+            pix_extraido = ""
+            try:
+                try:
+                    pagamento_extraido = navegador.find_element(By.XPATH,
+                                                                "//*[contains(text(), 'PAGAMENTO')]/following-sibling::*[1]").text.strip()
+                except:
+                    pass
+                try:
+                    pix_extraido = navegador.find_element(By.XPATH,
+                                                          "//*[text()='PIX' or contains(text(), 'PIX')]/following-sibling::*[1]").text.strip()
+                except:
+                    pass
+                if not pix_extraido:
+                    try:
+                        bloco_pix = navegador.find_element(By.XPATH,
+                                                           "//*[text()='PIX' or contains(text(), 'PIX')]/..").text
+                        pix_extraido = \
+                        bloco_pix.replace("PIX", "").replace("DADOS PROPRIETÁRIO", "").strip().split("\n")[0]
+                    except:
+                        pass
+            except:
+                pass
 
             break
 
@@ -272,22 +500,25 @@ while True:
     else:
         print("SSW já está logado! Voltando para o separador e regressando ao menu inicial...")
         navegador.switch_to.window(aba_principal_ssw)
-        # navegador.get(aba_principal_ssw)
-        # navegador.switch_to.window(aba_principal_ssw)
         time.sleep(3)
 
     # ------------------------------------------------------------------
-    # ETAPA 4: TELA 071
+    # ETAPA 4: TELA 071 (DINÂMICO)
     # ------------------------------------------------------------------
     print("Indo para a tela 71...")
     campo_unidade = espera.until(EC.element_to_be_clickable((By.ID, "2")))
     campo_unidade.click()
     campo_unidade.send_keys(Keys.CONTROL, "a")
     campo_unidade.send_keys(Keys.BACKSPACE)
-    campo_unidade.send_keys("MGE")
-    time.sleep(1)
+    time.sleep(1.5)
 
-    janelas_antes_71 = navegador.window_handles  # Grava as janelas abertas antes do Enter
+    # Aplica a regra ESTADO + 'E'
+    unidade_ssw = f"{estado_origem}E"
+    print(f"Preenchendo Unidade SSW com: {unidade_ssw}")
+    campo_unidade.send_keys(unidade_ssw)
+    time.sleep(1.5)
+
+    janelas_antes_71 = navegador.window_handles
 
     campo_opcao = espera.until(EC.element_to_be_clickable((By.ID, "3")))
     campo_opcao.click()
@@ -298,19 +529,17 @@ while True:
     campo_opcao.send_keys(Keys.ENTER)
 
     print("Aguardando o pop-up da tela 71 abrir...")
-    # Espera inteligente: Só prossegue quando o número de janelas aumentar
     espera.until(EC.number_of_windows_to_be(len(janelas_antes_71) + 1))
 
-    # Descobre qual é a janela nova e muda para ela
     aba_nova_71 = [j for j in navegador.window_handles if j not in janelas_antes_71][0]
     navegador.switch_to.window(aba_nova_71)
     navegador.maximize_window()
     print("✅ Tela 71 aberta com sucesso!")
 
     # ------------------------------------------------------------------
-    # ETAPA 5: PREENCHER TELA 071 E PESQUISAR NF
+    # ETAPA 5: PREENCHER TELA 071 E PESQUISAR NF (COM INTELIGÊNCIA HÍBRIDA)
     # ------------------------------------------------------------------
-    data_retroativa = (datetime.now() - timedelta(days=1)).strftime("%d%m%y")
+    data_retroativa = (datetime.now() - timedelta(days=3)).strftime("%d%m%y")
     print(f"Alterando o Período de Importação para: {data_retroativa}")
 
     campo_data_ini = espera.until(EC.presence_of_element_located((By.ID, "fld_data_ini")))
@@ -325,14 +554,82 @@ while True:
     campo_packing_list.click()
     campo_packing_list.send_keys(Keys.CONTROL, "a")
     campo_packing_list.send_keys(Keys.BACKSPACE)
+
+    # Guarda o estado das janelas ANTES do ENTER
+    janelas_antes_pesquisa_vrid = navegador.window_handles
+
     campo_packing_list.send_keys(vrid_limpo)
     time.sleep(1)
     campo_packing_list.send_keys(Keys.ENTER)
-    time.sleep(30)
 
+    print("Aguardando resposta do SSW (Nova janela de lista ou Erro '7. OK')...")
+
+    # === INTELIGÊNCIA: VERIFICAR ERRO OU SUCESSO EM TEMPO REAL ===
+    tempo_limite = time.time() + 60
+    nota_sem_nf = False
+    sucesso_janela = False
+
+    while time.time() < tempo_limite:
+
+        try:
+
+            botoes_erro = navegador.find_elements(By.XPATH,
+                                                  "//a[@id='0' or contains(text(), '7. OK') or contains(text(), '7.')]")
+            for btn in botoes_erro:
+                if btn.is_displayed():
+                    navegador.execute_script("arguments[0].click();", btn)
+                    print(f"⚠️ AVISO: O SSW recusou o VRID '{vrid_limpo}'. Pop-up de erro fechado!")
+                    nota_sem_nf = True
+                    break
+            if nota_sem_nf:
+                break
+        except Exception:
+            pass
+
+        if len(navegador.window_handles) > len(janelas_antes_pesquisa_vrid):
+            sucesso_janela = True
+            break
+
+        time.sleep(1)
+
+    # =================================================================
+    # FLUXO DE ABORTO: SE A NOTA NÃO TIVER NF OU DER TIMEOUT
+    # =================================================================
+    if nota_sem_nf or not sucesso_janela:
+        if not sucesso_janela and not nota_sem_nf:
+            print("⚠️ TIMEOUT: O SSW não respondeu. Abortando esta nota por segurança.")
+
+        print("Voltando ao portal para ignorar esta nota e passar à próxima...")
+
+        # Fecha abas residuais da Tela 71 e outras, deixando só o Portal e o Menu do SSW
+        for handle in list(navegador.window_handles):
+            if handle != aba_portal and handle != aba_principal_ssw:
+                navegador.switch_to.window(handle)
+                navegador.close()
+                time.sleep(0.5)
+
+        # Volta ao portal
+        navegador.switch_to.window(aba_portal)
+        time.sleep(2)
+
+        # Tenta fechar o modal aberto no portal
+        try:
+            botao_fechar_nota = navegador.find_element(By.XPATH,
+                                                       "//button[contains(text(), 'Cancelar') or contains(@class, 'lucide-x')]")
+            navegador.execute_script("arguments[0].click();", botao_fechar_nota)
+            print("✅ Pop-up da nota no portal fechado.")
+        except:
+            pass
+
+        print("⏭️ Saltando para a próxima nota do loop...")
+        continue  # Comando MÁGICO: Volta para o início do loop (for numero_nota...) e pega a próxima nota!
+
+    # =================================================================
+    # FLUXO NORMAL: SE A NOTA TIVER NF (ABRIU A JANELA)
+    # =================================================================
+    print("✅ O SSW aceitou o VRID. Focando na janela de Lista...")
     navegador.switch_to.window(navegador.window_handles[-1])
     navegador.maximize_window()
-
     # ------------------------------------------------------------------
     # ETAPA 6: EXTRAIR CNPJ DA NOTA (COM VERIFICAÇÃO "AMAZON")
     # ------------------------------------------------------------------
@@ -342,7 +639,6 @@ while True:
     print("Procurando a aba correta da Lista...")
     aba_lista = None
 
-    # Percorre TODAS as abas abertas
     for aba in navegador.window_handles:
         navegador.switch_to.window(aba)
         if "> Lista" in navegador.title:
@@ -413,14 +709,12 @@ while True:
     # ETAPA 7: FECHAR ABAS EXTRAS E IR PARA TELA 6
     # ------------------------------------------------------------------
     print("Limpando janelas e voltando ao Menu...")
-    # FECHA TUDO EXCETO O PORTAL (aba_portal) E O SSW PRINCIPAL (aba_principal_ssw)
     for handle in list(navegador.window_handles):
         if handle != aba_portal and handle != aba_principal_ssw:
             navegador.switch_to.window(handle)
             navegador.close()
             time.sleep(1)
 
-    # Regressa ao Menu do SSW que foi mantido aberto
     navegador.switch_to.window(aba_principal_ssw)
 
     print("Digitando a opção 6...")
@@ -488,7 +782,7 @@ while True:
     campo_data_ini_tela6.send_keys(Keys.CONTROL, "a")
     campo_data_ini_tela6.send_keys(Keys.BACKSPACE)
     campo_data_ini_tela6.send_keys(data_primeiro_dia)
-    time.sleep(3)
+    time.sleep(0.5)
 
     print(f"Inserindo VRID ({vrid_limpo}) no Romaneio/Packing List...")
     campo_packing = espera.until(EC.presence_of_element_located((By.ID, "fld_packing")))
@@ -496,9 +790,9 @@ while True:
     campo_packing.send_keys(Keys.CONTROL, "a")
     campo_packing.send_keys(Keys.BACKSPACE)
     campo_packing.send_keys(vrid_limpo)
-    time.sleep(3)
+    time.sleep(2)
 
-    placa_veiculo = placa_dinamica if placa_dinamica != "" else "RYE3H81"
+    placa_veiculo = placa_dinamica if placa_dinamica != "" else "-"
 
     print(f"Inserindo placa ({placa_veiculo})...")
     campo_placa_coleta = espera.until(EC.presence_of_element_located((By.ID, "placa_coleta")))
@@ -506,7 +800,7 @@ while True:
     campo_placa_coleta.send_keys(Keys.CONTROL, "a")
     campo_placa_coleta.send_keys(Keys.BACKSPACE)
     campo_placa_coleta.send_keys(placa_veiculo)
-    time.sleep(3)
+    time.sleep(2)
 
     print("Inserindo Tipo de mercadoria (1)...")
     campo_merc = espera.until(EC.element_to_be_clickable((By.ID, "cod_merc")))
@@ -514,14 +808,6 @@ while True:
     campo_merc.clear()
     time.sleep(1)
     campo_merc.send_keys("1")
-    time.sleep(1)
-
-    print("Inserindo Tipo de mercadoria novamente....")
-    campo_tab = espera.until(EC.presence_of_element_located((By.ID, "cod_merc")))
-    campo_tab.click()
-    campo_tab.send_keys(Keys.CONTROL, "a")
-    campo_tab.send_keys(Keys.BACKSPACE)
-    campo_tab.send_keys("1")
     time.sleep(2)
 
     print("Inserindo Tabela Genérica S...")
@@ -530,7 +816,7 @@ while True:
     campo_tab.send_keys(Keys.CONTROL, "a")
     campo_tab.send_keys(Keys.BACKSPACE)
     campo_tab.send_keys("S")
-    time.sleep(3)
+    time.sleep(1)
 
     print(f"Inserindo placa provisória ({placa_veiculo})...")
     campo_placa_prov = espera.until(EC.presence_of_element_located((By.ID, "placa_prov")))
@@ -538,9 +824,9 @@ while True:
     campo_placa_prov.send_keys(Keys.CONTROL, "a")
     campo_placa_prov.send_keys(Keys.BACKSPACE)
     campo_placa_prov.send_keys(placa_veiculo)
-    time.sleep(3)
+    time.sleep(2)
 
-    print("Inserindo Tipo de mercadoria novamente....")
+    print("Inserindo Tipo de mercadoria....")
     campo_tab = espera.until(EC.presence_of_element_located((By.ID, "cod_merc")))
     campo_tab.click()
     campo_tab.send_keys(Keys.CONTROL, "a")
@@ -549,7 +835,7 @@ while True:
     time.sleep(2)
 
     # ------------------------------------------------------------------
-    # ETAPA 10: CLICAR EM APONTAR NFs (1ª VEZ)
+    # ETAPA 10: CLICAR EM APONTAR NFs (COM INTELIGÊNCIA HÍBRIDA)
     # ------------------------------------------------------------------
     print("Clicando em 'Apontar NFs'...")
     janelas_antes_apontar = navegador.window_handles
@@ -557,163 +843,151 @@ while True:
     navegador.execute_script("arguments[0].click();", botao_apontar)
     print("✅ 'Apontar NFs' clicado!")
 
-    print("A verificar se surgiu o pop up de Aviso....")
+    print("Aguardando resposta do SSW (Nova janela de apontamento ou pop-up de Aviso)...")
 
-    try:
-        botao_ok_aviso = WebDriverWait(navegador, 3).until(
-            EC.element_to_be_clickable((By.ID, "0"))
-        )
-        navegador.execute_script("arguments[0].click();", botao_ok_aviso)
-        print("✅ Pop-up de Aviso detetado e '7. OK' clicado com sucesso!")
-        time.sleep(2)
-    except Exception:
-        print("ℹ️ Nenhum pop-up intermédio apareceu. Seguindo o fluxo normal...")
+    # === INTELIGÊNCIA HÍBRIDA: VERIFICAR ERRO OU SUCESSO ===
+    tempo_limite = time.time() + 55  # Espera até 55 segundos
+    sem_notas_apontar = False
+    sucesso_janela_apontar = False
+    time.sleep(10)
 
-    try:
-        WebDriverWait(navegador, 20).until(
-            EC.number_of_windows_to_be(len(janelas_antes_apontar) + 1)
-        )
-        print("✅ Nova janela detectada!")
-    except Exception:
-        print(f"⚠️ Janela nova demorou. Janelas abertas: {len(navegador.window_handles)}")
+    while time.time() < tempo_limite:
+        # 1. Verifica se o SSW deitou pop-up de Erro (7. OK) dizendo que não há NFs
+        try:
+            xpath_erro = "//a[@id='0' or contains(text(), '7. OK') or contains(text(), '7.')]"
+            botoes_erro = navegador.find_elements(By.XPATH, xpath_erro)
+            for btn in botoes_erro:
+                if btn.is_displayed():
+                    navegador.execute_script("arguments[0].click();", btn)
+                    print("⚠️ AVISO: SSW informou que não há notas para apontar! Pop-up fechado.")
+                    sem_notas_apontar = True
+                    time.sleep(5)
+                    break
+            if sem_notas_apontar:
+                break
+        except Exception:
+            pass
 
+        # 2. Verifica se o SSW abriu a nova janela com a lista de notas (Sucesso)
+        if len(navegador.window_handles) > len(janelas_antes_apontar):
+            sucesso_janela_apontar = True
+            break
+
+        time.sleep(5)
+
+    # =================================================================
+    # FLUXO DE ABORTO: SE NÃO HOUVER NOTAS PARA APONTAR
+    # =================================================================
+    if sem_notas_apontar or not sucesso_janela_apontar:
+        if not sucesso_janela_apontar and not sem_notas_apontar:
+            print("⚠️ TIMEOUT: Janela de apontar NFs não abriu e nenhum aviso foi dado.")
+
+        print("Limpando janelas e voltando ao portal para processar a próxima nota...")
+
+        # Fecha tudo exceto o Portal e a tela principal do SSW
+        for handle in list(navegador.window_handles):
+            if handle != aba_portal and handle != aba_principal_ssw:
+                navegador.switch_to.window(handle)
+                navegador.close()
+                time.sleep(3)
+
+        # Volta ao portal
+        navegador.switch_to.window(aba_portal)
+        time.sleep(3)
+
+        # Tenta fechar o modal aberto da Amazon no portal
+        try:
+            botao_fechar_nota = navegador.find_element(By.XPATH,
+                                                       "//button[contains(text(), 'Cancelar') or contains(@class, 'lucide-x')]")
+            navegador.execute_script("arguments[0].click();", botao_fechar_nota)
+            print("✅ Pop-up da nota no portal fechado.")
+            time.sleep(15)
+        except:
+            pass
+
+        print("⏭️ Saltando para a próxima nota do loop...")
+        continue  # Comando que aborta esta nota e volta para o início do loop!
+
+    # =================================================================
+    # FLUXO NORMAL: SE ABRIU A JANELA PARA APONTAR NOTAS
+    # =================================================================
     for handle in navegador.window_handles:
         if handle not in janelas_antes_apontar:
             navegador.switch_to.window(handle)
             navegador.maximize_window()
-            print("✅ Janela de Apontar NFs aberta!")
+            print("✅ Janela de Apontar NFs aberta com sucesso!")
             break
 
+    # Pausa para garantir que a grelha de notas carrega completamente antes da Etapa 11
+    time.sleep(35)
+
+    # ------------------------------------------------------------------
+    # ETAPA 11: SELEÇÃO E ENVIO (ÚNICA VEZ)
+    # ------------------------------------------------------------------
+    print("\n--- INICIANDO SELEÇÃO E ENVIO ---")
+
+    print("Selecionando todas as paginas...")
+    checkbox_todas = WebDriverWait(navegador, 35).until(
+        EC.element_to_be_clickable((By.XPATH, "//a[@class='baselnk' and contains(text(), 'Marcar')]")))
+    navegador.execute_script("arguments[0].click();", checkbox_todas)
+    print("✅ Todas as paginas selecionadas!")
+    time.sleep(10)
+
+    print("Dando scroll até o final da página...")
+    navegador.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(2)
+
+    print("Clicando na setinha de avançar...")
+    try:
+        botao_avancar = WebDriverWait(navegador, 45).until(
+            EC.element_to_be_clickable((By.XPATH, '(//a[@class="srimglnk" and @accesskey="&"])[1]')))
+        navegador.execute_script("arguments[0].click();", botao_avancar)
+        print("✅ Setinha clicada!")
+    except Exception:
+        print("ℹ Setinha não encontrada.")
     time.sleep(30)
 
-    # ------------------------------------------------------------------
-    # ETAPA 11: 3 RODADAS DE SELEÇÃO E ENVIO
-    # ------------------------------------------------------------------
-    for rodada in range(1, 4):
-        print(f"\n--- RODADA {rodada}/3 ---")
+    print("Clicando em Continuar no popup...")
+    try:
+        btn_continuar = WebDriverWait(navegador, 30).until(
+            EC.element_to_be_clickable((By.XPATH, "//a[@class='dialog' and contains(text(), 'Continuar')]")))
+        navegador.execute_script("arguments[0].click();", btn_continuar)
+        print("✅ Continuar clicado!")
+    except Exception:
+        print("ℹ Popup Continuar não encontrado.")
+    time.sleep(20)
 
-        if rodada > 1:
-            print("Clicando em Apontar NFs novamente...")
-            navegador.switch_to.window(navegador.window_handles[-1])
+    print("Aguardando popup 7.OK...")
+    time.sleep(30)
+    ok_clicado = False
 
-            janelas_antes_apontar2 = navegador.window_handles
-            botao_apontar2 = espera.until(EC.element_to_be_clickable((By.ID, "lnk_apontar")))
-            navegador.execute_script("arguments[0].click();", botao_apontar2)
+    try:
+        # Varre as janelas abertas para ter a certeza de que acha o 7.OK onde ele estiver
+        for handle in navegador.window_handles:
+            navegador.switch_to.window(handle)
+            xpath_popup = "//a[contains(text(), '7. OK') or contains(text(), '7.')] | //div[@id='errormsg']//a"
+            elementos = navegador.find_elements(By.XPATH, xpath_popup)
 
-            # ---------------------------------------------------------
-            # NOVA VERIFICAÇÃO: Pop-up "Nenhuma Nota Fiscal encontrada"
-            # ---------------------------------------------------------
-            print("A verificar se surgiu o pop-up de Aviso...")
-            try:
-                # Usa uma espera curta de 3 segundos para o botão id="0"
-                botao_ok_aviso = WebDriverWait(navegador, 3).until(
-                    EC.element_to_be_clickable((By.ID, "7. OK"))
-                )
-                navegador.execute_script("arguments[0].click();", botao_ok_aviso)
-                print("✅ Pop-up 'Nenhuma Nota' detetado e '7. OK' clicado!")
-                time.sleep(2)
+            if len(elementos) > 0:
+                navegador.execute_script("arguments[0].click();", elementos[0])
+                print("✅ 7.OK clicado com sucesso!")
+                ok_clicado = True
+                break
 
-                print("✅ Todas as notas já foram apontadas nas rondas anteriores. Lote finalizado!")
-                break  # O comando 'break' aborta o loop das 3 rondas e avança para a próxima fatura
+        if not ok_clicado:
+            print("⚠️ Popup 7.OK não apareceu no tempo esperado.")
 
-            except Exception:
-                print("ℹ️ Nenhum pop-up intermédio. Aguardando nova janela...")
-            # ---------------------------------------------------------
+    except Exception as e:
+        print(f"⚠️ Erro ao procurar popup 7.OK: {e}")
 
-            try:
-                WebDriverWait(navegador, 20).until(
-                    EC.number_of_windows_to_be(len(janelas_antes_apontar2) + 1)
-                )
-                print("✅ Nova janela detectada!")
-            except Exception:
-                print(f"⚠️ Janela nova demorou. Janelas abertas: {len(navegador.window_handles)}")
-
-            for handle in navegador.window_handles:
-                if handle not in janelas_antes_apontar2:
-                    navegador.switch_to.window(handle)
-                    navegador.maximize_window()
-                    print("✅ Nova janela de Apontar NFs aberta!")
-                    break
-
-            time.sleep(30)
-
-        if rodada in [1, 2]:
-            print("Selecionando todas as notas (checkbox)...")
-            checkbox_todas = WebDriverWait(navegador, 15).until(
-                EC.element_to_be_clickable((By.ID, "c0")))
-            navegador.execute_script("arguments[0].click();", checkbox_todas)
-            print("✅ Todas as notas selecionadas!")
-            time.sleep(2)
-
-        else:
-            print("Clicando em Marcar todas as páginas...")
-            btn_marcar = WebDriverWait(navegador, 15).until(
-                EC.element_to_be_clickable((By.XPATH, "//a[@class='baselnk' and contains(text(), 'Marcar')]")))
-            navegador.execute_script("arguments[0].click();", btn_marcar)
-            print("✅ Todas as páginas marcadas!")
-            time.sleep(3)
-
-        print("Dando scroll até o final da página...")
-        navegador.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(3)
-
-        print("Clicando na setinha de avançar...")
-        try:
-            botao_avancar = WebDriverWait(navegador, 5).until(
-                EC.element_to_be_clickable((By.XPATH, '(//a[@class="srimglnk" and @accesskey="&"])[1]')))
-            navegador.execute_script("arguments[0].click();", botao_avancar)
-            print("✅ Setinha clicada!")
-        except Exception:
-            print("ℹ Setinha não encontrada.")
-        time.sleep(8)
-
-        print("Clicando em Continuar no popup...")
-        try:
-            btn_continuar = WebDriverWait(navegador, 30).until(
-                EC.element_to_be_clickable((By.XPATH, "//a[@class='dialog' and contains(text(), 'Continuar')]")))
-            navegador.execute_script("arguments[0].click();", btn_continuar)
-            print("✅ Continuar clicado!")
-        except Exception:
-            print("ℹ Popup Continuar não encontrado.")
-        time.sleep(15)
-
-        if rodada in [1, 2]:
-            print("Aguardando popup 7.OK...")
-            time.sleep(8)
-            ok_clicado = False
-
-            try:
-                for handle in navegador.window_handles:
-                    navegador.switch_to.window(handle)
-                    xpath_popup = "//a[contains(text(), '7. OK') or contains(text(), '7.')] | //div[@id='errormsg']//a"
-                    elementos = navegador.find_elements(By.XPATH, xpath_popup)
-
-                    if len(elementos) > 0:
-                        navegador.execute_script("arguments[0].click();", elementos[0])
-                        print("✅ 7.OK clicado com sucesso!")
-                        ok_clicado = True
-                        break
-
-                if not ok_clicado:
-                    print("⚠️ Popup 7.OK não apareceu no tempo esperado.")
-
-            except Exception as e:
-                print(f"⚠️ Erro ao procurar popup 7.OK: {e}")
-
-            time.sleep(5)
-
-        else:
-            print("Aguardando a finalização completa do lote (Rodada 3)...")
-            time.sleep(40)
-            print("✅ Lote finalizado com sucesso!")
-
+    time.sleep(20)
     print(f"\n✅ Nota #{numero_nota} ({vrid_limpo}). Lançamento concluído com sucesso!")
+
     # ------------------------------------------------------------------
     # FECHAR TODAS AS JANELAS EXTRAS E VOLTAR AO PORTAL
     # ------------------------------------------------------------------
-    print("Fechando janelas extras e voltando ao portal...")
+    print("Fechando janelas extras e voltando ao portal para anexar o CTe...")
 
-    # Mantém apenas o Portal (aba_portal) e o SSW (aba_principal_ssw)
     for handle in list(navegador.window_handles):
         if handle != aba_portal and handle != aba_principal_ssw:
             navegador.switch_to.window(handle)
@@ -722,736 +996,499 @@ while True:
 
     navegador.switch_to.window(aba_portal)
     time.sleep(3)
-    print("✅ De volta ao portal! Buscando próxima nota...")
 
-# =====================================================================
-# FIM DO LOOP
-# =====================================================================
-print("\n✅ Robô finalizado! Todas as notas foram processadas.")
-time.sleep(10)# OFFICIAL
-
-import time
-from datetime import datetime, timedelta
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-import credenciais
-
-print("Iniciando Robô de Emissão de CTE...")
-
-# =====================================================================
-# CONFIGURAÇÃO DO NAVEGADOR
-# =====================================================================
-opcoes = Options()
-opcoes.add_argument("--start-maximized")
-
-servico = Service(ChromeDriverManager().install())
-navegador = webdriver.Chrome(service=servico, options=opcoes)
-espera = WebDriverWait(navegador, 15)
-
-# =====================================================================
-# ETAPA 1: LOGIN NO PORTAL
-# =====================================================================
-print("Acessando o Portal Emissor...")
-navegador.get("https://portal-dedicado.vercel.app/login")
-
-print("Realizando Login no Portal...")
-campo_usuario = espera.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Usuário']")))
-campo_usuario.send_keys(credenciais.PORTAL_USER)
-time.sleep(0.5)
-
-campo_senha = navegador.find_element(By.XPATH, "//input[@placeholder='Senha']")
-campo_senha.send_keys(credenciais.PORTAL_SENHA)
-time.sleep(0.5)
-
-botao_entrar = navegador.find_element(By.XPATH, "//button[@type='submit']")
-botao_entrar.click()
-time.sleep(5)
-print("Login no Portal realizado com sucesso!")
-
-# =====================================================================
-# ETAPA 1.5: FIXAR BARRA LATERAL
-# =====================================================================
-print("Verificando a barra lateral...")
-try:
-    gatilho_lateral = espera.until(
-        EC.presence_of_element_located((By.XPATH, "//div[@title='Passar o mouse para abrir o menu']")))
-    ActionChains(navegador).move_to_element(gatilho_lateral).perform()
-    time.sleep(1)
-
-    botao_alfinete = espera.until(EC.presence_of_element_located((
-        By.XPATH,
-        "//button[contains(@title, 'barra lateral') or .//*[name()='svg'][contains(@class, 'lucide-pin')]]"
-    )))
-
-    titulo_botao = botao_alfinete.get_attribute("title") or ""
-    if "desfixar" not in titulo_botao.lower():
-        navegador.execute_script("arguments[0].click();", botao_alfinete)
-        print("✅ Alfinete clicado com sucesso!")
-    else:
-        print("ℹ️ A barra lateral já está fixada.")
-    time.sleep(2)
-
-except Exception as e:
-    print(f"Aviso: Não foi possível interagir com o alfinete. Erro: {e}")
-
-# =====================================================================
-# ETAPA 1.6: SELECIONAR SOLICITANTE (AMAZON)
-# =====================================================================
-print("Abrindo menu do usuário...")
-try:
-    botao_usuario = espera.until(
-        EC.element_to_be_clickable((By.XPATH, "//button[@title='Selecionar solicitante']")))
-    navegador.execute_script("arguments[0].click();", botao_usuario)
-    time.sleep(1)
-
-    opcao_amazon = espera.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Amazon')]")))
-    navegador.execute_script("arguments[0].click();", opcao_amazon)
-    print("✅ Solicitante Amazon selecionado!")
-    time.sleep(2)
-
-except Exception as e:
-    print(f"Aviso: Falha ao selecionar a Amazon. Erro: {e}")
-
-# =====================================================================
-# ETAPA 1.7: NAVEGAR PARA EMISSÃO E FILTRAR PENDENTES
-# =====================================================================
-print("Navegando para Emissão e filtrando Pendentes...")
-try:
-    botao_emissao = espera.until(EC.element_to_be_clickable((By.XPATH, "//a[@href='/emissao']")))
-    navegador.execute_script("arguments[0].click();", botao_emissao)
-    time.sleep(3)
-
-    filtro_status = espera.until(EC.element_to_be_clickable(
-        (By.XPATH, "//label[contains(text(), 'Status Emissão')]/following-sibling::button[@role='combobox']")))
-    navegador.execute_script("arguments[0].click();", filtro_status)
-    time.sleep(1)
-
-    opcao_pendentes = espera.until(EC.element_to_be_clickable(
-        (By.XPATH, "//*[@role='option' and contains(., 'Pendentes')] | //div[text()='Pendentes']")))
-    navegador.execute_script("arguments[0].click();", opcao_pendentes)
-    time.sleep(2.5)
-
-except Exception as e:
-    print(f"Aviso: Problema nos filtros. Erro: {e}")
-
-# =====================================================================
-# VARIÁVEIS GLOBAIS DE CONTROLO DE SESSÃO DO SSW
-# =====================================================================
-numero_nota = 0
-aba_portal = navegador.window_handles[0]
-ssw_logado = False
-aba_principal_ssw = None
-
-# =====================================================================
-# LOOP PRINCIPAL - PROCESSA TODAS AS NOTAS ATÉ ACABAR
-# =====================================================================
-while True:
-    numero_nota += 1
-    print(f"\n{'=' * 60}")
-    print(f"PROCESSANDO NOTA #{numero_nota}")
-    print(f"{'=' * 60}")
-
-    # Garante foco no portal e atualiza a lista
-    navegador.switch_to.window(aba_portal)
-    navegador.refresh()
-    time.sleep(3)
-
-    # Reaplicar filtro Pendentes após refresh
+    # =====================================================================
+    # FLUXO 2: ANEXAR CTE NO PORTAL
+    # =====================================================================
+    print("\n--- ANEXANDO CTE NO PORTAL ---")
+    caminho_arquivo_cte = credenciais.CAMINHO_CTE
     try:
-        filtro_status = espera.until(EC.element_to_be_clickable(
-            (By.XPATH, "//label[contains(text(), 'Status Emissão')]/following-sibling::button[@role='combobox']")))
-        navegador.execute_script("arguments[0].click();", filtro_status)
-        time.sleep(1)
-
-        opcao_pendentes = espera.until(EC.element_to_be_clickable(
-            (By.XPATH, "//*[@role='option' and contains(., 'Pendentes')] | //div[text()='Pendentes']")))
-        navegador.execute_script("arguments[0].click();", opcao_pendentes)
-        time.sleep(2.5)
+        xpath_input_cte = "//span[contains(text(), 'CTe')]/following-sibling::input[@type='file']"
+        input_cte = espera.until(EC.presence_of_element_located((By.XPATH, xpath_input_cte)))
+        input_cte.send_keys(caminho_arquivo_cte)
+        print("✅ Arquivo CTe anexado com sucesso!")
+        time.sleep(6)
     except Exception as e:
-        print(f"Aviso nos filtros: {e}")
+        print(f"⚠️ Erro ao anexar o CTE: {e}")
 
-    # Busca notas MG disponíveis
-    xpath_mg = "//tr[.//div[contains(text(), ' - MG') or contains(@title, ' - MG')]]//button[contains(., 'Emitir')]"
-    try:
-        botoes_emitir = espera.until(EC.presence_of_all_elements_located((By.XPATH, xpath_mg)))
-        print(f"Encontrada(s) {len(botoes_emitir)} nota(s) de MG nesta página.")
-    except Exception:
-        print("Nenhuma nota MG encontrada. Encerrando robô.")
-        break
+    # =====================================================================
+    # FLUXO 3: EMISSÃO DO CTRB
+    # =====================================================================
+    print("\n--- INICIANDO FLUXO CTRB ---")
+    navegador.switch_to.window(aba_principal_ssw)
 
-    nota_acessada = False
-    placa_dinamica = ""
-    vrid_limpo = ""
-    cnpj_pagador = "FALHOU"
-
-    # ------------------------------------------------------------------
-    # TENTA ACESSAR A PRÓXIMA NOTA LIVRE
-    # ------------------------------------------------------------------
-    for index, botao in enumerate(botoes_emitir):
-        linha = botao.find_element(By.XPATH, "./ancestor::tr")
-
-        # 1. VERIFICA SE TEM ALERTA VERMELHO
-        try:
-            alerta = linha.find_elements(By.XPATH,
-                                         ".//td[1]//div[contains(@class, 'border-red-500') or contains(@class, 'animate-pulse')]")
-            if len(alerta) > 0:
-                print(f"🛑 Pulando nota {index + 1}: Alerta vermelho.")
-                continue
-        except:
-            pass
-
-        # 2. VERIFICA SE ESTÁ OCUPADA (TEM NOME)
-        try:
-            span_nome = linha.find_element(By.XPATH, ".//td[1]//span[contains(@class, 'truncate')]")
-            nome_emitente = span_nome.text.strip()
-            if nome_emitente != "":
-                print(f"⏭️ Pulando nota {index + 1}: Ocupada por '{nome_emitente}'.")
-                continue
-        except:
-            pass
-
-        # 3. SE PASSOU PELOS DOIS TESTES ACIMA, A NOTA ESTÁ OK!
-        print(f"✅ Nota {index + 1} está OK! Acessando...")
-        navegador.execute_script("arguments[0].click();", botao)
-        time.sleep(2)
-
-        # Trata pop-up de rota já atribuída que pode aparecer ao clicar
-        if navegador.find_elements(By.XPATH, "//*[contains(text(), 'Rota já atribuída')]"):
-            navegador.find_element(By.XPATH, "//button[contains(., 'Entendi')]").click()
-            time.sleep(1)
-            continue
-
-        # Confirma que abriu a tela de emissão da nota
-        if navegador.find_elements(By.XPATH, "//*[contains(text(), 'Anexar Documentos de Emissão')]"):
-            nota_acessada = True
-
-            # -----------------------------------------------------
-            # EXTRAINDO VRID E PLACA DO PORTAL
-            # -----------------------------------------------------
-            time.sleep(1)
-
-            # 1. Extrai o VRID (Garantindo que pega o pop-up ativo mais recente)
-            try:
-                elementos_vrid = espera.until(EC.presence_of_all_elements_located((
-                    By.XPATH, "//*[contains(text(), 'ID: ')]"
-                )))
-                vrid_limpo = elementos_vrid[-1].text.replace("ID:", "").strip()
-                print(f"🎯 VRID extraído: {vrid_limpo}")
-            except Exception as e:
-                print("Aviso: Não consegui extrair o VRID do portal.")
-                vrid_limpo = ""
-
-            # 2. Extrai a PLACA dinamicamente
-            try:
-                time.sleep(2)
-                # Procura a palavra 'Placas' exata e entra no span da linha de baixo que tem a classe 'truncate'
-                xpath_placa = "//span[text()='Placas']/following-sibling::div//span[contains(@class, 'truncate')]"
-
-                # Pega todos os elementos correspondentes e foca no último [-1] (o pop-up ativo por cima)
-                elementos_placa = espera.until(EC.presence_of_all_elements_located((By.XPATH, xpath_placa)))
-                elemento_alvo = elementos_placa[-1]
-
-                # Tenta pegar a placa lendo o atributo "title" (método mais seguro e invisível a botões)
-                placa_dinamica = elemento_alvo.get_attribute("title")
-
-                # Fallback: se o title vier vazio por algum motivo, tenta pegar o texto visível da tela
-                if not placa_dinamica:
-                    placa_dinamica = elemento_alvo.text
-
-                placa_dinamica = placa_dinamica.strip()
-
-                if placa_dinamica == "":
-                    print("⚠️ Aviso: O campo de placa foi encontrado, mas estava VAZIO no portal.")
-                else:
-                    print(f"🎯 Placa extraída com sucesso: {placa_dinamica}")
-
-            except Exception as erro_tecnico:
-                print(f"⚠️ Aviso: Não consegui extrair a placa do portal. Motivo: {type(erro_tecnico).__name__}")
-                placa_dinamica = ""
-
-            break
-
-    # ------------------------------------------------------------------
-    # ETAPA 3: ABRIR SSW E FAZER LOGIN (OU REAPROVEITAR ABA EXISTENTE)
-    # ------------------------------------------------------------------
-    if not ssw_logado:
-        print("Abrindo SSW em nova aba...")
-        navegador.execute_script("window.open('');")
-        aba_principal_ssw = navegador.window_handles[-1]
-        navegador.switch_to.window(aba_principal_ssw)
-        navegador.get("https://sistema.ssw.inf.br/")
-        time.sleep(3)
-
-        print("Logando no SSW...")
-        navegador.find_element(By.ID, '1').send_keys(credenciais.SSW_DOMINIO)
-        navegador.find_element(By.ID, '2').send_keys(credenciais.SSW_CPF)
-        navegador.find_element(By.ID, '3').send_keys(credenciais.SSW_USUARIO)
-        navegador.find_element(By.ID, '4').send_keys(credenciais.SSW_SENHA)
-        navegador.find_element(By.ID, "5").click()
-
-        time.sleep(2)
-        print("✅ Login SSW Realizado!")
-        ssw_logado = True
-    else:
-        print("SSW já está logado! Voltando para o separador e regressando ao menu inicial...")
-        navegador.switch_to.window(aba_principal_ssw)
-        # navegador.get(aba_principal_ssw)
-        # navegador.switch_to.window(aba_principal_ssw)
-        time.sleep(3)
-
-    # ------------------------------------------------------------------
-    # ETAPA 4: TELA 071
-    # ------------------------------------------------------------------
-    print("Indo para a tela 71...")
+    print("Indo para a tela 72...")
     campo_unidade = espera.until(EC.element_to_be_clickable((By.ID, "2")))
     campo_unidade.click()
     campo_unidade.send_keys(Keys.CONTROL, "a")
     campo_unidade.send_keys(Keys.BACKSPACE)
-    campo_unidade.send_keys("MGE")
+    campo_unidade.send_keys(unidade_ssw)
     time.sleep(1)
 
-    janelas_antes_71 = navegador.window_handles  # Grava as janelas abertas antes do Enter
+    janelas_antes_72 = navegador.window_handles
 
     campo_opcao = espera.until(EC.element_to_be_clickable((By.ID, "3")))
     campo_opcao.click()
     campo_opcao.send_keys(Keys.CONTROL, "a")
     campo_opcao.send_keys(Keys.BACKSPACE)
-    campo_opcao.send_keys("71")
+    campo_opcao.send_keys("72")
     time.sleep(1)
     campo_opcao.send_keys(Keys.ENTER)
 
-    print("Aguardando o pop-up da tela 71 abrir...")
-    # Espera inteligente: Só prossegue quando o número de janelas aumentar
-    espera.until(EC.number_of_windows_to_be(len(janelas_antes_71) + 1))
+    print("A aguardar que a janela 72 abra...")
+    espera.until(EC.number_of_windows_to_be(len(janelas_antes_72) + 1))
 
-    # Descobre qual é a janela nova e muda para ela
-    aba_nova_71 = [j for j in navegador.window_handles if j not in janelas_antes_71][0]
-    navegador.switch_to.window(aba_nova_71)
+    janelas_depois_72 = navegador.window_handles
+    aba_nova_72 = [j for j in janelas_depois_72 if j not in janelas_antes_72][0]
+
+    navegador.switch_to.window(aba_nova_72)
     navegador.maximize_window()
-    print("✅ Tela 71 aberta com sucesso!")
+    print(f"✅ Foco alterado para a Tela 72 com sucesso (Unidade: {unidade_ssw})!") # Aqui estou redirecionando o foco para a aba 72.
 
-    # ------------------------------------------------------------------
-    # ETAPA 5: PREENCHER TELA 071 E PESQUISAR NF
-    # ------------------------------------------------------------------
-    data_retroativa = (datetime.now() - timedelta(days=1)).strftime("%d%m%y")
-    print(f"Alterando o Período de Importação para: {data_retroativa}")
+    print(f"A preencher a placa ({placa_dinamica})...") # Aqui estou colocando a placa abrir a outra pasta pra preencher os dados.
+    campo_placa = WebDriverWait(navegador, 10).until(
+        EC.presence_of_element_located((By.ID, "placa_veic")))
 
-    campo_data_ini = espera.until(EC.presence_of_element_located((By.ID, "fld_data_ini")))
-    campo_data_ini.click()
-    campo_data_ini.send_keys(Keys.CONTROL, "a")
-    campo_data_ini.send_keys(Keys.BACKSPACE)
-    campo_data_ini.send_keys(data_retroativa)
+    navegador.execute_script("arguments[0].scrollIntoView(true);", campo_placa)
+    time.sleep(0.5)
+    campo_placa.clear()
+    time.sleep(0.5)
+    campo_placa.send_keys(placa_dinamica)
+    time.sleep(1)
+
+    try:
+        btn_enviar = navegador.find_element(By.ID, "btn_env")
+        navegador.execute_script("arguments[0].click();", btn_enviar)
+        print("✅ Botão de enviar clicado com sucesso!")
+    except Exception:
+        campo_placa.send_keys(Keys.ENTER)
+        print("✅ Placa enviada usando a tecla ENTER!")
+
     time.sleep(2)
 
-    print(f"Preenchendo Romaneio/Packing List com VRID: {vrid_limpo}")
-    campo_packing_list = espera.until(EC.presence_of_element_located((By.ID, "fld_packing_list")))
-    campo_packing_list.click()
-    campo_packing_list.send_keys(Keys.CONTROL, "a")
-    campo_packing_list.send_keys(Keys.BACKSPACE)
-    campo_packing_list.send_keys(vrid_limpo)
-    time.sleep(1)
-    campo_packing_list.send_keys(Keys.ENTER)
-    time.sleep(30)
+    try: # Tratando o 1° Pop uP "Emitir novo CTRB assim mesmo.
+        alerta_navegador = navegador.switch_to.alert
+        texto_alerta = alerta_navegador.text
+        alerta_navegador.accept()
+        print(f"⚠️ Alerta do navegador fechado: '{texto_alerta}'")
+        time.sleep(1)
+    except Exception:
+        pass
 
-    navegador.switch_to.window(navegador.window_handles[-1])
-    navegador.maximize_window()
+    print("Aguardando confirmação de emissão de CTRB (1º Pop-up)...")
+    try:
+        xpath_ctrb = "//a[@id='0' and contains(text(), 'CTRB')]"
+        botao_ctrb = WebDriverWait(navegador, 8).until(
+            EC.visibility_of_element_located((By.XPATH, xpath_ctrb))
+        )
+        navegador.execute_script("arguments[0].click();", botao_ctrb)
+        print("✅ Opção '2. Emitir novo CTRB assim mesmo.' clicada com sucesso!") # 1° Pop Up clicado. Seguindo para o 2°
+        time.sleep(4)
+    except Exception:
+        print("ℹ️ 1º Pop-up (CTRB) não apareceu.") # Mensagem enviada se o PopUp não aparecer.
 
-    # ------------------------------------------------------------------
-    # ETAPA 6: EXTRAIR CNPJ DA NOTA (COM VERIFICAÇÃO "AMAZON")
-    # ------------------------------------------------------------------
-
-    print("Aguardando a janela com a lista de notas carregar...")
-    time.sleep(5)
-    print("Procurando a aba correta da Lista...")
-    aba_lista = None
-
-    # Percorre TODAS as abas abertas
-    for aba in navegador.window_handles:
-        navegador.switch_to.window(aba)
-        if "> Lista" in navegador.title:
-            print("✅ Foco na Janela da Lista!")
-            aba_lista = aba
-            break
-
-    if aba_lista is None:
-        raise Exception("Não foi possível encontrar a janela '> Lista'.")
-
-    navegador.maximize_window()
-    time.sleep(3)
-
-    linhas_notas = navegador.find_elements(By.XPATH, "//tr[@rid]//a[contains(@class, 'sra2')]")
-    quantidade_notas = len(linhas_notas)
-    print(f"Total de notas para analisar na lista: {quantidade_notas}")
-
-    cnpj_pagador = "FALHOU"
-
-    for i in range(quantidade_notas):
-        janelas_antes = navegador.window_handles
-
-        print(f"Clicando na nota da linha {i + 1}...")
-        primeira_nota = espera.until(EC.presence_of_element_located((
-            By.XPATH, f"//tr[@rid='{i}']//a[contains(@class, 'sra2')]"
-        )))
-        navegador.execute_script("arguments[0].click();", primeira_nota)
-
-        espera.until(EC.number_of_windows_to_be(len(janelas_antes) + 1))
-        janelas_depois = navegador.window_handles
-        aba_nova = [j for j in janelas_depois if j not in janelas_antes][0]
-
-        navegador.switch_to.window(aba_nova)
-        navegador.maximize_window()
+    print("Aguardando aviso de falta de Manifesto (2º Pop-up)...") # Aqui estou aguardando o segundo aviso. "Veiculo não possui Manifesto".
+    try:
+        xpath_manifesto = "//a[@id='0' and contains(text(), 'Continuar')]"
+        botao_manifesto = WebDriverWait(navegador, 8).until(
+            EC.visibility_of_element_located((By.XPATH, xpath_manifesto))
+        )
+        navegador.execute_script("arguments[0].click();", botao_manifesto)
+        print("✅ Opção '2. Continuar assim mesmo.' (Manifesto) clicada com sucesso!") # Aqui exibo a mensagem no terminal. Apos ter clicado em Continuar assim mesmo.
         time.sleep(3)
+    except Exception:
+        print("ℹ️ 2º Pop-up (Manifesto) não apareceu.")
 
-        print("Extraindo e analisando o CNPJ do Pagador...")
+    print("\n✅ Fluxo da Tela 72 concluído!") # Aqui concluir a parte de clicar em todos os PopUp que aparece apos colocar a placa. 2 Ao total.
+    time.sleep(2)
+
+    print("\nAguardando a tela de Terceiro carregar...")
+    try:
+        time.sleep(3)
+        janelas_abertas = navegador.window_handles
+        navegador.switch_to.window(janelas_abertas[-1])
+        navegador.maximize_window()
+        print("✅ Foco ajustado. Preenchendo Placa - CEP Origem - CEP Destino - Previsão de Chegada - Valor a Pagar .")
+        # Aqui já direciono o foco para a tela que aparece apos os PopUp. Preencho Unidade Destino - CEP Destino
+
+        # Clicando no Texto CEP origem, para buscar a cidade e encontrar o CEP
+        xpath_link_cep = "//*[@id='link_cep_orig' or contains(text(), 'CEP')]"
+        link_cep_origem = WebDriverWait(navegador, 15).until(
+            EC.presence_of_element_located((By.XPATH, xpath_link_cep))
+        )
+        navegador.execute_script("arguments[0].click();", link_cep_origem)
+        print("✅ Link 'CEP origem' clicado!")
+
+        print("Aguardando o campo de Nome da cidade aparecer...")
+        campo_busca = WebDriverWait(navegador, 30).until(
+            EC.presence_of_element_located((By.ID, "-1"))
+        )
+
+        navegador.execute_script("arguments[0].focus();", campo_busca)
+        # time.sleep(5)
+        WebDriverWait(navegador, 20).until(EC.visibility_of_element_located((By.ID, "tbllkp")))
+
+        # =========================================================================
+        # NOVA INTELIGÊNCIA: DIGITA A ORIGEM E CLICA NO ESTADO CORRETO
+        # =========================================================================
+        campo_busca.send_keys(cidade_origem)
+        estado_alvo_origem = estado_origem
+        print(f"Aguardando a lista para selecionar a cidade de origem do estado: {estado_alvo_origem}...")
+
         try:
-            elemento_pagador = espera.until(EC.presence_of_element_located((
-                By.XPATH,
-                "//div[contains(text(), 'Pagador:')]/following-sibling::div[@class='data']"
-            )))
-            texto_pagador = elemento_pagador.text.strip()
-            print(f"Texto extraído: '{texto_pagador}'")
+            # Aguarda a tabela de opções aparecer
+            WebDriverWait(navegador, 5).until(EC.visibility_of_element_located((By.ID, "tbllkp")))
+            time.sleep(1)
 
-            if "-" in texto_pagador:
-                partes = texto_pagador.split("-", 1)
-                nome_pagador = partes[1].strip().upper()
+            # XPath procura a linha exata com o estado de origem na 2ª coluna
+            xpath_cidade_certa = f"//table[@id='tbllkp']//tr[contains(@class, 'lkptr') and .//td[2][contains(text(), '{estado_alvo_origem}')]]"
+            linha_correta = navegador.find_element(By.XPATH, xpath_cidade_certa)
 
-                if "AMAZON" in nome_pagador:
-                    cnpj_pagador = partes[0].strip()
-                    print(f"✅ Sucesso! Pagador AMAZON confirmado. CNPJ extraído: {cnpj_pagador}")
-                    break
-                else:
-                    print(f"⏭️ Ignorando nota. O pagador não é Amazon (Encontrado: {nome_pagador}).")
-            else:
-                print("⏭️ Ignorando nota. Formato inesperado (sem traço).")
+            navegador.execute_script("arguments[0].click();", linha_correta)
+            print(f"✅ Cidade de origem selecionada na lista pelo estado ({estado_alvo_origem})!")
+            time.sleep(1.5)
+
+            # ENTER de segurança
+            campo_busca.send_keys(Keys.ENTER)
 
         except Exception as e:
-            print("Aviso: Não consegui extrair o CNPJ desta nota.")
+            print("⚠️ Aviso: Lista não carregou ou estado não encontrado na origem. Dando ENTER padrão...")
+            campo_busca.send_keys(Keys.ENTER)
 
-        print("Fechando detalhes desta nota e testando a próxima...")
-        navegador.close()
-        navegador.switch_to.window(aba_lista)
-        time.sleep(8)
+        print(f"✅ Cidade '{cidade_origem}' digitada e busca iniciada com sucesso!")
 
-    # ------------------------------------------------------------------
-    # ETAPA 7: FECHAR ABAS EXTRAS E IR PARA TELA 6
-    # ------------------------------------------------------------------
-    print("Limpando janelas e voltando ao Menu...")
-    # FECHA TUDO EXCETO O PORTAL (aba_portal) E O SSW PRINCIPAL (aba_principal_ssw)
-    for handle in list(navegador.window_handles):
-        if handle != aba_portal and handle != aba_principal_ssw:
-            navegador.switch_to.window(handle)
-            navegador.close()
-            time.sleep(1)
+    except Exception as e:
+        print(f"⚠️ Erro ao tentar preencher o CEP de origem: {e}")
 
-    # Regressa ao Menu do SSW que foi mantido aberto
-    navegador.switch_to.window(aba_principal_ssw)
-
-    print("Digitando a opção 6...")
-    campo_opcao = espera.until(EC.element_to_be_clickable((By.ID, "3")))
-    campo_opcao.click()
-    campo_opcao.send_keys(Keys.CONTROL, "a")
-    campo_opcao.send_keys(Keys.BACKSPACE)
-    campo_opcao.send_keys("6")
-    time.sleep(1)
-    campo_opcao.send_keys(Keys.ENTER)
-    time.sleep(5)
-
-    navegador.switch_to.window(navegador.window_handles[-1])
-    navegador.maximize_window()
-    print(f"✅ Tela 6 pronta! | VRID: {vrid_limpo} | CNPJ: {cnpj_pagador}")
-
-    # ------------------------------------------------------------------
-    # ETAPA 8: SELECIONAR E - EDI e G - REDESPACHO
-    # ------------------------------------------------------------------
-    print("Selecionando a opção 'E - EDI'...")
-    janelas_antes_e = navegador.window_handles
-    botao_e = espera.until(EC.presence_of_element_located((By.ID, "link_doc_e")))
-    navegador.execute_script("arguments[0].click();", botao_e)
-    print("✅ Opção 'E' clicada!")
-    time.sleep(3)
-
-    janelas_depois_e = navegador.window_handles
-    if len(janelas_depois_e) > len(janelas_antes_e):
-        aba_nova_e = [j for j in janelas_depois_e if j not in janelas_antes_e][0]
-        navegador.switch_to.window(aba_nova_e)
-        navegador.maximize_window()
-        print("✅ Foco na janela 'E'.")
-
-    print("Selecionando a opção 'G - Redespacho intermediário'...")
-    janelas_antes_g = navegador.window_handles
-    botao_g = espera.until(EC.presence_of_element_located((By.ID, "link_doc_g")))
-    navegador.execute_script("arguments[0].click();", botao_g)
-    print("✅ Opção 'G' clicada!")
-    time.sleep(3)
-
-    janelas_depois_g = navegador.window_handles
-    if len(janelas_depois_g) > len(janelas_antes_g):
-        aba_nova_g = [j for j in janelas_depois_g if j not in janelas_antes_g][0]
-        navegador.switch_to.window(aba_nova_g)
-        navegador.maximize_window()
-        print("✅ Foco no formulário 'G'.")
-
-    # ------------------------------------------------------------------
-    # ETAPA 9: PREENCHER FORMULÁRIO
-    # ------------------------------------------------------------------
-    print("Inserindo CNPJ do Pagador...")
-    if cnpj_pagador and cnpj_pagador != "FALHOU":
-        campo_cnpj = espera.until(EC.presence_of_element_located((By.ID, "cgc_pagador")))
-        campo_cnpj.click()
-        campo_cnpj.send_keys(Keys.CONTROL, "a")
-        campo_cnpj.send_keys(Keys.BACKSPACE)
-        campo_cnpj.send_keys(cnpj_pagador)
-        print(f"✅ CNPJ {cnpj_pagador} inserido!")
-    else:
-        print("⚠️ CNPJ vazio ou falhou.")
-
-    data_primeiro_dia = datetime.now().replace(day=1).strftime("%d%m%y")
-    campo_data_ini_tela6 = espera.until(EC.presence_of_element_located((By.ID, "data_ini")))
-    campo_data_ini_tela6.click()
-    campo_data_ini_tela6.send_keys(Keys.CONTROL, "a")
-    campo_data_ini_tela6.send_keys(Keys.BACKSPACE)
-    campo_data_ini_tela6.send_keys(data_primeiro_dia)
-    time.sleep(3)
-
-    print(f"Inserindo VRID ({vrid_limpo}) no Romaneio/Packing List...")
-    campo_packing = espera.until(EC.presence_of_element_located((By.ID, "fld_packing")))
-    campo_packing.click()
-    campo_packing.send_keys(Keys.CONTROL, "a")
-    campo_packing.send_keys(Keys.BACKSPACE)
-    campo_packing.send_keys(vrid_limpo)
-    time.sleep(3)
-
-    placa_veiculo = placa_dinamica if placa_dinamica != "" else "RYE3H81"
-
-    print(f"Inserindo placa ({placa_veiculo})...")
-    campo_placa_coleta = espera.until(EC.presence_of_element_located((By.ID, "placa_coleta")))
-    campo_placa_coleta.click()
-    campo_placa_coleta.send_keys(Keys.CONTROL, "a")
-    campo_placa_coleta.send_keys(Keys.BACKSPACE)
-    campo_placa_coleta.send_keys(placa_veiculo)
-    time.sleep(3)
-
-    print("Inserindo Tipo de mercadoria (1)...")
-    campo_merc = espera.until(EC.element_to_be_clickable((By.ID, "cod_merc")))
-    campo_merc.click()
-    campo_merc.clear()
-    time.sleep(1)
-    campo_merc.send_keys("1")
-    time.sleep(1)
-
-    print("Inserindo Tipo de mercadoria novamente....")
-    campo_tab = espera.until(EC.presence_of_element_located((By.ID, "cod_merc")))
-    campo_tab.click()
-    campo_tab.send_keys(Keys.CONTROL, "a")
-    campo_tab.send_keys(Keys.BACKSPACE)
-    campo_tab.send_keys("1")
     time.sleep(2)
 
-    print("Inserindo Tabela Genérica S...")
-    campo_tab = espera.until(EC.presence_of_element_located((By.ID, "tab_gen")))
-    campo_tab.click()
-    campo_tab.send_keys(Keys.CONTROL, "a")
-    campo_tab.send_keys(Keys.BACKSPACE)
-    campo_tab.send_keys("S")
-    time.sleep(3)
+    #/////////////////////////////////////////////////////////////////////////
+    # PREENCHENDO A UNIDADE DE DESTINO - BUSCANDO O NOME DA CIDADE
+    #-------------------------------------------------------------------------
 
-    print(f"Inserindo placa provisória ({placa_veiculo})...")
-    campo_placa_prov = espera.until(EC.presence_of_element_located((By.ID, "placa_prov")))
-    campo_placa_prov.click()
-    campo_placa_prov.send_keys(Keys.CONTROL, "a")
-    campo_placa_prov.send_keys(Keys.BACKSPACE)
-    campo_placa_prov.send_keys(placa_veiculo)
-    time.sleep(3)
-
-    print("Inserindo Tipo de mercadoria novamente....")
-    campo_tab = espera.until(EC.presence_of_element_located((By.ID, "cod_merc")))
-    campo_tab.click()
-    campo_tab.send_keys(Keys.CONTROL, "a")
-    campo_tab.send_keys(Keys.BACKSPACE)
-    campo_tab.send_keys("1")
-    time.sleep(2)
-
-    # ------------------------------------------------------------------
-    # ETAPA 10: CLICAR EM APONTAR NFs (1ª VEZ)
-    # ------------------------------------------------------------------
-    print("Clicando em 'Apontar NFs'...")
-    janelas_antes_apontar = navegador.window_handles
-    botao_apontar = espera.until(EC.presence_of_element_located((By.ID, "lnk_apontar")))
-    navegador.execute_script("arguments[0].click();", botao_apontar)
-    print("✅ 'Apontar NFs' clicado!")
-
-    print("A verificar se surgiu o pop up de Aviso....")
-
+    print("\nPreenchendo Unidade de Destino e Previsão de Chegada...")
     try:
-        botao_ok_aviso = WebDriverWait(navegador, 3).until(
-            EC.element_to_be_clickable((By.ID, "0"))
+        campo_unidade_dest = WebDriverWait(navegador, 10).until(
+            EC.presence_of_element_located((By.ID, "id_filial_sigla_dest"))
         )
-        navegador.execute_script("arguments[0].click();", botao_ok_aviso)
-        print("✅ Pop-up de Aviso detetado e '7. OK' clicado com sucesso!")
+        navegador.execute_script("arguments[0].focus();", campo_unidade_dest)
+        time.sleep(0.5)
+        campo_unidade_dest.clear()
+        time.sleep(0.5)
+
+        campo_unidade_dest.send_keys("FEC", Keys.TAB)
+        time.sleep(1.5)
+        print("✅ Unidade destino 'FEC' preenchida!")
         time.sleep(2)
-    except Exception:
-        print("ℹ️ Nenhum pop-up intermédio apareceu. Seguindo o fluxo normal...")
 
-    try:
-        WebDriverWait(navegador, 20).until(
-            EC.number_of_windows_to_be(len(janelas_antes_apontar) + 1)
-        )
-        print("✅ Nova janela detectada!")
-    except Exception:
-        print(f"⚠️ Janela nova demorou. Janelas abertas: {len(navegador.window_handles)}")
-
-    for handle in navegador.window_handles:
-        if handle not in janelas_antes_apontar:
-            navegador.switch_to.window(handle)
-            navegador.maximize_window()
-            print("✅ Janela de Apontar NFs aberta!")
-            break
-
-    time.sleep(30)
-
-    # ------------------------------------------------------------------
-    # ETAPA 11: 3 RODADAS DE SELEÇÃO E ENVIO
-    # ------------------------------------------------------------------
-    for rodada in range(1, 4):
-        print(f"\n--- RODADA {rodada}/3 ---")
-
-        if rodada > 1:
-            print("Clicando em Apontar NFs novamente...")
-            navegador.switch_to.window(navegador.window_handles[-1])
-
-            janelas_antes_apontar2 = navegador.window_handles
-            botao_apontar2 = espera.until(EC.element_to_be_clickable((By.ID, "lnk_apontar")))
-            navegador.execute_script("arguments[0].click();", botao_apontar2)
-
-            # ---------------------------------------------------------
-            # NOVA VERIFICAÇÃO: Pop-up "Nenhuma Nota Fiscal encontrada"
-            # ---------------------------------------------------------
-            print("A verificar se surgiu o pop-up de Aviso...")
-            try:
-                # Usa uma espera curta de 3 segundos para o botão id="0"
-                botao_ok_aviso = WebDriverWait(navegador, 3).until(
-                    EC.element_to_be_clickable((By.ID, "0"))
-                )
-                navegador.execute_script("arguments[0].click();", botao_ok_aviso)
-                print("✅ Pop-up 'Nenhuma Nota' detetado e '7. OK' clicado!")
-                time.sleep(2)
-
-                print("✅ Todas as notas já foram apontadas nas rondas anteriores. Lote finalizado!")
-                break  # O comando 'break' aborta o loop das 3 rondas e avança para a próxima fatura
-
-            except Exception:
-                print("ℹ️ Nenhum pop-up intermédio. Aguardando nova janela...")
-            # ---------------------------------------------------------
-
-            try:
-                WebDriverWait(navegador, 20).until(
-                    EC.number_of_windows_to_be(len(janelas_antes_apontar2) + 1)
-                )
-                print("✅ Nova janela detectada!")
-            except Exception:
-                print(f"⚠️ Janela nova demorou. Janelas abertas: {len(navegador.window_handles)}")
-
-            for handle in navegador.window_handles:
-                if handle not in janelas_antes_apontar2:
-                    navegador.switch_to.window(handle)
-                    navegador.maximize_window()
-                    print("✅ Nova janela de Apontar NFs aberta!")
-                    break
-
-            time.sleep(30)
-
-        if rodada in [1, 2]:
-            print("Selecionando todas as notas (checkbox)...")
-            checkbox_todas = WebDriverWait(navegador, 15).until(
-                EC.element_to_be_clickable((By.ID, "c0")))
-            navegador.execute_script("arguments[0].click();", checkbox_todas)
-            print("✅ Todas as notas selecionadas!")
+        print("Aguardando possível pop-up '7. OK' da unidade de destino...")
+        try:
+            xpath_7ok = "//a[contains(text(), '7. OK') or contains(text(), '7.')]"
+            botao_7ok = WebDriverWait(navegador, 4).until(
+                EC.visibility_of_element_located((By.XPATH, xpath_7ok))
+            )
+            navegador.execute_script("arguments[0].click();", botao_7ok)
+            print("✅ Pop-up '7. OK' fechado com sucesso!")
             time.sleep(2)
+        except Exception:
+            print("ℹ️ Pop-up '7. OK' não apareceu (fluxo prosseguiu normalmente).")
 
-        else:
-            print("Clicando em Marcar todas as páginas...")
-            btn_marcar = WebDriverWait(navegador, 15).until(
-                EC.element_to_be_clickable((By.XPATH, "//a[@class='baselnk' and contains(text(), 'Marcar')]")))
-            navegador.execute_script("arguments[0].click();", btn_marcar)
-            print("✅ Todas as páginas marcadas!")
+        print("\nIniciando o preenchimento do CEP Destino...")
+        try:
             time.sleep(3)
 
-        print("Dando scroll até o final da página...")
-        navegador.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(3)
+            xpath_link_cep_dest = "//*[@id='link_cep_dest']"
+            link_cep_destino = WebDriverWait(navegador, 15).until(
+                EC.presence_of_element_located((By.XPATH, xpath_link_cep_dest))
+            )
+            navegador.execute_script("arguments[0].click();", link_cep_destino)
+            print("✅ Link 'CEP destino' clicado!")
 
-        print("Clicando na setinha de avançar...")
-        try:
-            botao_avancar = WebDriverWait(navegador, 5).until(
-                EC.element_to_be_clickable((By.XPATH, '(//a[@class="srimglnk" and @accesskey="&"])[1]')))
-            navegador.execute_script("arguments[0].click();", botao_avancar)
-            print("✅ Setinha clicada!")
-        except Exception:
-            print("ℹ Setinha não encontrada.")
-        time.sleep(8)
+            print("Aguardando o campo de Nome da Unidade (destino) aparecer...")
+            campo_busca_dest = WebDriverWait(navegador, 10).until(
+                EC.presence_of_element_located((By.ID, "-1"))
+            )
 
-        print("Clicando em Continuar no popup...")
-        try:
-            btn_continuar = WebDriverWait(navegador, 30).until(
-                EC.element_to_be_clickable((By.XPATH, "//a[@class='dialog' and contains(text(), 'Continuar')]")))
-            navegador.execute_script("arguments[0].click();", btn_continuar)
-            print("✅ Continuar clicado!")
-        except Exception:
-            print("ℹ Popup Continuar não encontrado.")
-        time.sleep(15)
+            navegador.execute_script("arguments[0].focus();", campo_busca_dest)
+            time.sleep(2)
+            campo_busca_dest.clear()
+            time.sleep(2)
 
-        if rodada in [1, 2]:
-            print("Aguardando popup 7.OK...")
-            time.sleep(8)
-            ok_clicado = False
+            # 1. GUARDA AS JANELAS AGORA (Antes de interagir com a lista, para não quebrar a lógica do ecrã 027)
+            janelas_antes_cidade = navegador.window_handles
 
+            # 2. DIGITA A CIDADE E PREPARA A BUSCA
+            campo_busca_dest.send_keys(cidade_destino)
+            estado_alvo = estado_destino
+            print(f"Aguardando a lista para selecionar a cidade do estado: {estado_alvo}...")
+
+            # 3. INTERCEPTA A LISTA E CLICA NO ESTADO CERTO
             try:
-                for handle in navegador.window_handles:
-                    navegador.switch_to.window(handle)
-                    xpath_popup = "//a[contains(text(), '7. OK') or contains(text(), '7.')] | //div[@id='errormsg']//a"
-                    elementos = navegador.find_elements(By.XPATH, xpath_popup)
+                # Aguarda a tabela de opções aparecer
+                espera.until(EC.visibility_of_element_located((By.ID, "tbllkp")))
+                time.sleep(1)
 
-                    if len(elementos) > 0:
-                        navegador.execute_script("arguments[0].click();", elementos[0])
-                        print("✅ 7.OK clicado com sucesso!")
-                        ok_clicado = True
-                        break
+                # Monta o XPath que procura a linha exata com o estado correto na 2ª coluna
+                xpath_cidade_certa = f"//table[@id='tbllkp']//tr[contains(@class, 'lkptr') and .//td[2][contains(text(), '{estado_alvo}')]]"
+                linha_correta = navegador.find_element(By.XPATH, xpath_cidade_certa)
 
-                if not ok_clicado:
-                    print("⚠️ Popup 7.OK não apareceu no tempo esperado.")
+                # Clica na cidade correta
+                navegador.execute_script("arguments[0].click();", linha_correta)
+                print(f"✅ Cidade selecionada na lista pelo estado ({estado_alvo})!")
+                time.sleep(1.5)
+
+                # Dá um ENTER de segurança para garantir a submissão do campo
+                campo_busca_dest.send_keys(Keys.ENTER)
 
             except Exception as e:
-                print(f"⚠️ Erro ao procurar popup 7.OK: {e}")
+                print("⚠️ Aviso: Lista não carregou ou estado não encontrado. Dando ENTER padrão...")
+                campo_busca_dest.send_keys(Keys.ENTER)
 
-            time.sleep(5)
+            print(f"✅ Busca pela cidade '{cidade_destino}' concluída!")
 
-        else:
-            print("Aguardando a finalização completa do lote (Rodada 3)...")
-            time.sleep(40)
-            print("✅ Lote finalizado com sucesso!")
+            # campo_busca_dest.clear()
+            # time.sleep(2)
+            # campo_busca_dest.send_keys(cidade_destino) # Digita o nome da cidade na barrinha de Buscar.
+            # time.sleep(3)
+            # janelas_antes_cidade = navegador.window_handles
+            #
+            # campo_busca_dest.send_keys(Keys.ENTER) # enter cego. Pega a primeira cidade com o nome que aparecer e clica.
+            # print(f"✅ Cidade de destino '{cidade_destino}' digitada e busca iniciada com sucesso!")
 
-    print(f"\n✅ Nota #{numero_nota} ({vrid_limpo}). Lançamento concluído com sucesso!")
-    # ------------------------------------------------------------------
-    # FECHAR TODAS AS JANELAS EXTRAS E VOLTAR AO PORTAL
-    # ------------------------------------------------------------------
-    print("Fechando janelas extras e voltando ao portal...")
+            print("Verificando se o SSW forçou a abertura da tela '027 - Cadastro'...")
+            try:
+                time.sleep(4)
+                janelas_depois_cidade = navegador.window_handles
 
-    # Mantém apenas o Portal (aba_portal) e o SSW (aba_principal_ssw)
+                if len(janelas_depois_cidade) > len(janelas_antes_cidade):
+                    aba_027 = [j for j in janelas_depois_cidade if j not in janelas_antes_cidade][0]
+                    navegador.switch_to.window(aba_027)
+                    navegador.maximize_window()
+                    print("⚠️ Ecrã 027 detetado! A mudar o foco para fechar a pendência...")
+
+                    botao_mais = WebDriverWait(navegador, 10).until(
+                        EC.presence_of_element_located((By.ID, "btn_mais"))
+                    )
+                    navegador.execute_script("arguments[0].click();", botao_mais)
+                    print("✅ Botão de gravação (seta azul) clicado no ecrã 027!")
+
+                    time.sleep(3)
+                    navegador.switch_to.window(janelas_antes_cidade[-1])
+                    print("✅ Foco retornado ao ecrã de emissão com sucesso.")
+                else:
+                    print("ℹ️ Nenhuma pendência detetada. O fluxo continua normalmente.")
+            except Exception:
+                navegador.switch_to.window(janelas_antes_cidade[-1])
+
+        except Exception as e:
+            print(f"⚠️ Erro ao tentar preencher o CEP de destino: {e}")
+
+        time.sleep(2)
+
+        print("\nPreenchendo a Previsão de Chegada (Data e Hora)...")
+        formato_data = "%d%m%y"
+        if data_previsao and hora_previsao:
+            try:
+                data_obj = datetime.strptime(str(data_previsao).strip(), formato_data).date()
+                hoje = datetime.now().date()
+
+                if data_obj <= hoje:
+                    data_previsao = (hoje + timedelta(days=2)).strftime(formato_data)
+                    print(f"⚠️ Data ajustada para mais 2 Dias: {data_previsao}")
+
+                else:
+                    print(f"A data no portal esta no futuro ({data_previsao}. Mantido a data original)")
+            except Exception as e:
+                print(f"⚠️ Erro ao calcular a data (Valor que o portal mandou: '{data_previsao}'): {e}")
+
+            try:
+                campo_data = WebDriverWait(navegador, 5).until(
+                    EC.presence_of_element_located((By.ID, "id_data_prev_cheg"))
+                )
+                navegador.execute_script("arguments[0].focus();", campo_data)
+                time.sleep(0.5)
+                campo_data.clear()
+                campo_data.send_keys(data_previsao, Keys.TAB)
+                time.sleep(3)
+
+                print("Aguardando possível pop-up '7. OK' da Data...")
+                try:
+                    xpath_7ok_data = "//a[contains(text(), '7. OK') or contains(text(), '7.')]"
+                    botao_7ok_data = WebDriverWait(navegador, 3).until(
+                        EC.visibility_of_element_located((By.XPATH, xpath_7ok_data))
+                    )
+                    navegador.execute_script("arguments[0].click();", botao_7ok_data)
+                    print("✅ Pop-up '7. OK' (Data) fechado!")
+                    time.sleep(2)
+                except Exception:
+                    print("ℹ Pop-up de Data não apareceu.")
+
+            except Exception:
+                print("ℹ️ Campo de DATA não encontrado.")
+
+            try:
+                campo_hora = navegador.find_element(By.ID, "id_hora_prev_cheg")
+                navegador.execute_script("arguments[0].focus();", campo_hora)
+                time.sleep(1)
+                campo_hora.clear()
+                campo_hora.send_keys(hora_previsao)
+            except Exception:
+                print("ℹ️ Campo de HORA não encontrado.")
+
+            print(f"✅ Previsão de chegada preenchida com sucesso!")
+
+    except Exception as e:
+        print(f"⚠️ Erro geral ao preencher destino/previsão: {e}")
+
+    time.sleep(3)
+
+    print("\nPreenchendo Natureza, Valor e Observações...")
+    try:
+        try:
+            WebDriverWait(navegador, 15).until(
+                EC.invisibility_of_element_located((By.ID, "procimg"))
+            )
+        except Exception:
+            pass
+
+        campo_nat_carga = navegador.find_element(By.ID, "id_nat_carga")
+        navegador.execute_script("arguments[0].focus();", campo_nat_carga)
+        time.sleep(0.5)
+        campo_nat_carga.clear()
+        campo_nat_carga.send_keys("1", Keys.TAB)
+        time.sleep(0.5)
+
+        campo_valor = navegador.find_element(By.ID, "id_vlr_ficha")
+        navegador.execute_script("arguments[0].focus();", campo_valor)
+        time.sleep(0.5)
+        campo_valor.clear()
+        campo_valor.send_keys(valor_pagar)
+
+        campo_obs1 = navegador.find_element(By.ID, "id_obs1")
+        campo_obs1.send_keys(f"PAGAMENTO: {pagamento_extraido}")
+
+        campo_obs2 = navegador.find_element(By.ID, "id_obs2")
+        campo_obs2.send_keys(f"ID: {vrid_limpo} - Placa: {placa_dinamica} ")
+        time.sleep(0.5)
+
+        campo_obs3 = navegador.find_element(By.ID, "id_obs3")
+        campo_obs3.send_keys(f"PIX: {pix_extraido}")
+
+        print("✅ Todos os dados preenchidos com sucesso!")
+
+    except Exception as e:
+        print(f"⚠️ Erro ao preencher os dados finais: {e}")
+
+    time.sleep(3)
+
+    try:
+        print("Realizando scroll até o botão final de emissão...")
+        botao_enviar_final = WebDriverWait(navegador, 5).until(
+            EC.presence_of_element_located((By.ID, "id_link_env"))
+        )
+        navegador.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_enviar_final)
+        time.sleep(1)
+
+        print("Acionando a função interna de envio do SSW...")
+        navegador.execute_script("f_button_env_disable(); ajaxEnvia('CTRB_RPA', 0);")
+        print("🚀 COMANDO DE EMISSÃO ENVIADO.")
+
+    except Exception as e:
+        print(f"⚠️ Erro na etapa final de emissão: {e}")
+
+    time.sleep(13)
+
+    # --------------------------------------------------
+    # TRATAMENTO DOS POP-UPS FINAIS PÓS-ENVIO DO CTRB
+    # --------------------------------------------------
+    print("Aguardando pop-up do SSW pós-envio...")
+    time.sleep(4)  # Espera inicial para o SSW pensar e carregar o pop-up
+
+    # Vamos verificar a tela e procurar qualquer pop-up que tenha aberto
+    for tentativa in range(3):  # Tenta procurar até 3 vezes (cerca de 9 segundos)
+        texto_tela_ctrb = navegador.find_element(By.TAG_NAME, "body").text
+
+        # 1. TRATAR O AVISO DE VEÍCULO JÁ CONTRATADO
+        if "Veículo já contratado com CTRB" in texto_tela_ctrb:
+            print("⚠️ AVISO SSW: Veículo com CTRB pendente sem chegada.")
+            try:
+                # Procura a opção 2, pelo ID="-1" ou pelo texto
+                botao_emitir_assim_mesmo = navegador.find_element(By.XPATH,
+                                                                  "//a[@id='-1' or contains(text(), 'Emitir novo CTRB assim mesmo')]")
+                navegador.execute_script("arguments[0].click();", botao_emitir_assim_mesmo)
+                print("✅ Opção '2. Emitir novo CTRB assim mesmo' clicada!")
+                time.sleep(3)  # Aguarda o SSW processar esta escolha e possivelmente atirar o "1. Continuar"
+            except Exception as e:
+                print(f"⚠️ Erro ao tentar clicar na opção 2: {e}")
+
+        # 2. TRATAR O SUCESSO NORMAL (POP-UP "1. CONTINUAR")
+        try:
+            xpath_1continuar = "//*[@id='-4' and contains(@class, 'dialog')]"
+            botao_continuar = navegador.find_element(By.XPATH, xpath_1continuar)
+            navegador.execute_script("arguments[0].click();", botao_continuar)
+            print("✅ Pop-up '1. Continuar' de sucesso clicado e fechado!")
+            break  # Se achou o sucesso, sai do loop de tentativas
+        except:
+            pass  # Se não achou, deixa a próxima tentativa do loop correr
+
+        time.sleep(3)  # Espera antes de tentar ler a tela outra vez
+
+    print(f"\n✅ Lançamento CTRB ({vrid_limpo}) concluído com sucesso!")
+
+    print("Fechando janelas do SSW e voltando ao portal para anexar o CTRB...")
     for handle in list(navegador.window_handles):
         if handle != aba_portal and handle != aba_principal_ssw:
             navegador.switch_to.window(handle)
             navegador.close()
-            time.sleep(1)
+            time.sleep(0.5)
 
     navegador.switch_to.window(aba_portal)
     time.sleep(3)
+
+    # =====================================================================
+    # FLUXO 4: ANEXAR CTRB E CONFIRMAR EMISSÃO NO PORTAL
+    # =====================================================================
+    print("\n--- ANEXANDO CTRB E CONFIRMANDO NO PORTAL ---")
+    caminho_arquivo_ctrb = credenciais.CAMINHO_CTRB
+
+    try:
+        xpath_input_ctrb = "//span[contains(text(), 'CTRB')]/following-sibling::input[@type='file']"
+        input_ctrb = espera.until(EC.presence_of_element_located((By.XPATH, xpath_input_ctrb)))
+        input_ctrb.send_keys(caminho_arquivo_ctrb)
+        print("✅ Arquivo CTRB anexado com sucesso!")
+        time.sleep(6)  # Tempo para o portal processar o 2º arquivo e acender o botão
+    except Exception as e:
+        print(f"⚠️ Erro ao anexar o CTRB: {e}")
+
+    # CLICAR EM CONFIRMAR EMISSÃO (BOTÃO VERDE)
+    try:
+        # 1. Esperando ativamente até que o botão "OK / Confirmar Emissão" esteja visível e clicável
+        print("Aguardando o botão verde de confirmação ficar ativo...")
+        botao_confirmar = espera.until(
+            EC.element_to_be_clickable(
+                (By.XPATH, "//button[contains(text(), 'Confirmar Emissão') or contains(text(), 'OK')]"))
+        )
+
+        # 2. Fazendo um scroll para garantir que o botão está na tela antes de clicar
+        navegador.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_confirmar)
+        time.sleep(1)  # Pausa rápida após o scroll
+
+        # 3. CLIQUE NATIVO (como um humano), sem usar o execute_script
+        botao_confirmar.click()
+
+        print("✅ Emissão CONFIRMADA E FINALIZADA no portal Amazon!")
+        time.sleep(3)
+
+    except Exception as e:
+        print(f"⚠️ Botão de confirmação falhou. Motivo: {e}")
+        print("Tentando fechar no Cancelar/X...")
+        try:
+            botao_fechar_nota_portal = navegador.find_element(By.XPATH,
+                                                              "//button[contains(text(), 'Cancelar') or contains(@class, 'lucide-x')]")
+            navegador.execute_script("arguments[0].click();", botao_fechar_nota_portal)
+        except:
+            pass
+
     print("✅ De volta ao portal! Buscando próxima nota...")
 
 # =====================================================================
